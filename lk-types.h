@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "dbuf-ay.h"
 
 struct sock {
 };
@@ -116,6 +117,7 @@ struct sk_buff {
 #ifdef CONFIG_NETWORK_SECMARK
   __u32 secmark;
 #endif
+  dbuf_t *dbuf; /* reference to dbuf inner type */
   unsigned int truesize;
   atomic_t users;
   unsigned char * head;

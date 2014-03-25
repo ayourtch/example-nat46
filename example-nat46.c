@@ -21,9 +21,17 @@ int pcapi;
 
 
 int tun_read_ev(int idx, dbuf_t *d, void *p) {
-  printf("Got packet!\n");
-  debug_dump(DBG_GLOBAL, -1, d->buf, d->dsize);
-  return d->dsize; // sock_send_data(tuni, d);
+  printf("Got packet on tunnel!\n");
+  debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
+  handle_v4_packet(d);
+  return d->dsize;
+}
+
+int pcap_read_ev(int idx, dbuf_t *d, void *p) {
+  printf("Got packet on pcap!\n");
+  debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
+  handle_v6_packet(d);
+  return d->dsize;
 }
 
 
@@ -35,14 +43,21 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  set_debug_level(DBG_GLOBAL, 1000);
+  /*
+    set_debug_level(DBG_GLOBAL, 1000);
+  */
 
   pcapi = attach_pcap(argv[1]);
+  set_v6_idx(pcapi);
 
   tuni = attach_tun_interface(NULL);
+  set_v4_idx(tuni);
 
   hdl = cdata_get_handlers(tuni);
   hdl->ev_read = tun_read_ev;
+
+  hdl = cdata_get_handlers(pcapi);
+  hdl->ev_read = pcap_read_ev;
   while(1) {
     if (timeout == 0) { 
       timeout = 1000;

@@ -9,3 +9,8 @@
 #include "nat46-glue.h"
 
 
+
+void nat64_ipv6_input(struct sk_buff *old_skb) {
+}
+void nat64_ipv4_input(struct sk_buff *old_skb) {
+}
