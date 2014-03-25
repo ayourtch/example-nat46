@@ -1,3 +1,5 @@
+/* (c) Andrew Yourtchenko 2014, ayourtch@gmail.com */
+
 #include <net/route.h>
 
 #include <netinet/in.h>
