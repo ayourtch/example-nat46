@@ -10,6 +10,8 @@
 #define BUG_ON(x) assert(!(x))
 #define likely(x) (x)
 #define unlikely(x) (x)
+#define GFP_ATOMIC 0
+typedef int gfp_t;
 
 #define ETH_P_IP        0x0800
 #define ETH_P_IPV6      0x86DD
@@ -193,6 +195,7 @@ struct sk_buff {
 };  
 
 
+
 #define __LITTLE_ENDIAN_BITFIELD
 
 struct iphdr {
@@ -365,5 +368,9 @@ struct icmp6hdr {
 #define ICMPV6_EXC_FRAGTIME             1
 
 
+int ipv6_addr_type(const struct in6_addr *addr);
+struct ipv6hdr *ipv6_hdr(struct sk_buff *skb);
+unsigned char *skb_pull(struct sk_buff *skb, unsigned int len);
+struct sk_buff *alloc_skb(unsigned int size, gfp_t priority);
 
 #endif

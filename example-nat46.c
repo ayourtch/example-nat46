@@ -39,13 +39,15 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  /* set_debug_level(DBG_GLOBAL, 3); */
+  set_debug_level(DBG_GLOBAL, 30); 
 
   pcapi = attach_pcap_with_filter(argv[1], "ip6");
   set_v6_idx(pcapi);
 
   tuni = attach_tun_interface(NULL);
   set_v4_idx(tuni);
+
+  set_debug_level(DBG_GLOBAL, 0); 
 
   hdl = cdata_get_handlers(tuni);
   hdl->ev_read = tun_read_ev;

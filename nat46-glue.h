@@ -1,4 +1,6 @@
 /* (c) Andrew Yourtchenko 2014, ayourtch@gmail.com */
+#ifndef __V6_GLUE_H__
+#define __V6_GLUE_H__
 
 #include "lk-types.h"
 
@@ -12,4 +14,6 @@ void set_v4_idx(int idx);
 void set_v6_idx(int idx);
 void handle_v4_packet(dbuf_t *d);
 void handle_v6_packet(dbuf_t *d);
+
+#endif
 

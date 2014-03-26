@@ -197,7 +197,28 @@ unsigned char *skb_pull(struct sk_buff *skb, unsigned int len) {
         return unlikely(len > skb->len) ? NULL : __skb_pull(skb, len);
 }
 
+void skb_reserve(struct sk_buff *skb, int len) {
+        skb->data += len;
+        skb->tail += len;
+}
 
+struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
+  unsigned int sz = (10 + (size/8))*8;
+  struct sk_buff *sk = NULL;
+  dbuf_t *d = dalloc(sz + sizeof(struct sk_buff));
+
+  if (d) {
+    d->dsize = d->size;
+    sk = (void *)&d->buf[sz];
+    sk->dbuf = d;
+    sk->data = d->buf;
+    sk->len = size;
+    sk->tail = sk->data + size;
+  } else {
+    return NULL;
+  }
+  return sk;
+}
 
 
 /*
@@ -636,7 +657,7 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
   uint16_t proto;
   int i;
 
-  BUG_ON(skb->protocol != ETH_P_IPV6);
+  BUG_ON(skb->protocol != htons(ETH_P_IPV6));
   skb_pull(skb, sizeof(struct ipv6hdr));
 
   if (
@@ -718,6 +739,11 @@ int route_ipv4(struct sk_buff *skb) {
 }
 
 int route_ipv6(struct sk_buff *skb) {
+  dprepend(skb->dbuf, 14);
+  memcpy(&skb->dbuf->buf[0], v6_main_stack.gw_mac, 6);
+  memcpy(&skb->dbuf->buf[6], v6_main_stack.my_mac, 6);
+  skb->dbuf->buf[12] = 0xdd;
+  skb->dbuf->buf[13] = 0x86;
   sock_send_data(v6_idx, skb->dbuf);
   return 1;
 }
@@ -739,8 +765,8 @@ void handle_v4_packet(dbuf_t *d) {
   struct sk_buff sk;
   sk.dbuf = d;
   v6_stack_periodic(&v6_main_stack);
-  if (d->buf[5] == 0x45) {
-    sk.protocol = ETH_P_IP;
+  if (d->buf[4] == 0x45) {
+    sk.protocol = htons(ETH_P_IP);
     sk.l3_offset = 4;
     sk.data = sk.dbuf->buf + sk.l3_offset;
     sk.len = sk.dbuf->dsize - (sk.l3_offset);
@@ -754,8 +780,8 @@ void handle_v6_packet(dbuf_t *d) {
 
   struct sk_buff sk;
   sk.dbuf = d;
-  sk.protocol = ntohs(* (uint16_t *)(&d->buf[12]));
-  if (sk.protocol == ETH_P_IPV6) {
+  sk.protocol = (*(uint16_t *)(&d->buf[12]));
+  if (sk.protocol == htons(ETH_P_IPV6)) {
     // debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     sk.l3_offset = ETHER_SIZE;
     // FIXME: parse IPv6 header
