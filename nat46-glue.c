@@ -476,6 +476,7 @@ void ndisc_recv_ra(struct sk_buff *skb, v6_stack_t *v6) {
         break; 
       case 3:
         debug(DBG_V6, 10, "    Prefix");
+        debug_dump(DBG_V6, 10, (void *)&p[16], 16);
         i = find_my_address_for_prefix(v6, (void *)&p[16], 64);
         if (i < 0) {
           i = find_my_address_free_slot(v6);
@@ -667,10 +668,14 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
     debug(DBG_V6, 40, "LL Multicast packet received");
     if(v6hdr->nexthdr == NEXTHDR_ICMP) { 
       icmp6h = (void*) skb->data;
-      skb_pull(skb, sizeof(struct icmp6hdr));
       switch(icmp6h->icmp6_type) {
         case NDISC_NEIGHBOUR_SOLICITATION:
+          skb_pull(skb, sizeof(struct icmp6hdr));
           ndisc_recv_ns(skb, v6);
+          break;
+        case NDISC_ROUTER_ADVERTISEMENT:
+          ndisc_recv_ra(skb, v6);
+          break;
       }
     }
     return 0;
@@ -686,12 +691,12 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
            * To-us packet with link-local destination.
            */
           proto = v6hdr->nexthdr;
-          skb_pull(skb, sizeof(struct ipv6hdr));
           switch(proto) {
             case NEXTHDR_ICMP:
               icmp6h = (void*) skb->data;
               switch(icmp6h->icmp6_type) {
                 case NDISC_NEIGHBOUR_SOLICITATION:
+                  skb_pull(skb, sizeof(struct ipv6hdr));
                   ndisc_recv_ns(skb, v6);
                   break;
                 case NDISC_ROUTER_ADVERTISEMENT:
