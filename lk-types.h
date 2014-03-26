@@ -3,7 +3,13 @@
 
 #include <stdint.h>
 #include <netinet/in.h>
+#include <assert.h>
+
 #include "dbuf-ay.h"
+
+#define BUG_ON(x) assert(!(x))
+#define likely(x) (x)
+#define unlikely(x) (x)
 
 #define ETH_P_IP        0x0800
 #define ETH_P_IPV6      0x86DD
@@ -324,6 +330,12 @@ struct icmp6hdr {
 #define ICMPV6_MGM_QUERY                130
 #define ICMPV6_MGM_REPORT               131
 #define ICMPV6_MGM_REDUCTION            132
+
+#define NDISC_ROUTER_SOLICITATION       133
+#define NDISC_ROUTER_ADVERTISEMENT      134
+#define NDISC_NEIGHBOUR_SOLICITATION    135
+#define NDISC_NEIGHBOUR_ADVERTISEMENT   136
+#define NDISC_REDIRECT                  137
 
 #define ICMPV6_NI_QUERY                 139
 #define ICMPV6_NI_REPLY                 140

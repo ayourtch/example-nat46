@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -I..
+CFLAGS=-Wall -I.. -g
 LDFLAGS=-L .. -lay -lpcap
 
 OBJECTS=example-nat46.o nat46-core.o nat46-glue.o

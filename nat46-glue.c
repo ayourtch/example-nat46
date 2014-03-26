@@ -5,8 +5,6 @@
    parse the packet, and call the callbacks.
 */
 
-#include <assert.h>
-
 #include "nat46-glue.h"
 #include "nat46-core.h"
 #include "lk-types.h"
@@ -37,10 +35,10 @@ struct ipv6hdr *ipv6_hdr(struct sk_buff *skb) {
 
 __be32 s6_addr32(const struct in6_addr *addr, int i) {
   int s = 4*i;
-  return addr->s6_addr[3+s] +
+  return htonl(addr->s6_addr[3+s] +
          (addr->s6_addr[2+s] << 8) +
          (addr->s6_addr[1+s] << 16) +
-         (addr->s6_addr[0+s] << 24);
+         (addr->s6_addr[0+s] << 24));
 }
 
 static inline unsigned int ipv6_addr_scope2type(unsigned int scope)
@@ -133,6 +131,13 @@ static inline int ipv6_addr_src_scope(const struct in6_addr *addr)
         return __ipv6_addr_src_scope(__ipv6_addr_type(addr));
 }
 
+bool ipv6_addr_all_hosts(const struct in6_addr *addr) {
+  return ( (s6_addr32(addr, 0) == 0xff020000) &&
+           (s6_addr32(addr, 1) == 0) &&
+           (s6_addr32(addr, 2) == 0) &&
+           (s6_addr32(addr, 3) == 1) );
+}
+
 static inline bool __ipv6_addr_needs_scope_id(int type)
 {
         return type & IPV6_ADDR_LINKLOCAL ||
@@ -162,6 +167,12 @@ ipv6_masked_addr_cmp(const struct in6_addr *a1, const struct in6_addr *m,
                  );
 }
 
+static inline void ipv6_addr_copy(struct in6_addr *a1, const struct in6_addr *a2)
+{
+        memcpy(a1, a2, sizeof(struct in6_addr));
+}
+
+
 static inline void ipv6_addr_prefix(struct in6_addr *pfx,
                                     const struct in6_addr *addr,
                                     int plen)
@@ -174,6 +185,16 @@ static inline void ipv6_addr_prefix(struct in6_addr *pfx,
         memcpy(pfx->s6_addr, addr, o);
         if (b != 0)
                 pfx->s6_addr[o] = addr->s6_addr[o] & (0xff00 >> b);
+}
+
+static inline unsigned char *__skb_pull(struct sk_buff *skb, unsigned int len) {
+        skb->len -= len;
+        BUG_ON(skb->len < skb->data_len);
+        return skb->data += len;
+}
+
+static inline unsigned char *skb_pull(struct sk_buff *skb, unsigned int len) {
+        return unlikely(len > skb->len) ? NULL : __skb_pull(skb, len);
 }
 
 
@@ -297,7 +318,7 @@ void v6_send_rs(v6_stack_t *v6) {
 
   memcpy(&v6hdr->saddr, &v6->my_v6addr[0], sizeof(v6hdr->saddr));
 
-  icmp6hdr->icmp6_type = 133; // Router Solicitation
+  icmp6hdr->icmp6_type = NDISC_ROUTER_SOLICITATION; // Router Solicitation
   icmp6hdr->icmp6_code = 0;
   p = (void *) (icmp6hdr + 1);
   store_Xbytes(&p, 1, 2);
@@ -316,7 +337,7 @@ void v6_send_rs(v6_stack_t *v6) {
   store_be16(&p, ETH_P_IPV6);
 
   debug(DBG_V6, 20, "Sending RS");
-  debug_dump(DBG_V6, 25, d->buf, d->dsize);
+  debug_dump(DBG_V6, 125, d->buf, d->dsize);
   sock_send_data(v6_idx, d);
 }
 
@@ -336,7 +357,7 @@ void send_dad(v6_stack_t *v6, int i) {
   v6hdr->daddr.s6_addr[12] = 0xff;
   memset(&v6hdr->saddr, 0, sizeof(v6hdr->saddr));
 
-  icmp6hdr->icmp6_type = 135; // Neighbor Solicitation
+  icmp6hdr->icmp6_type = NDISC_NEIGHBOUR_SOLICITATION; 
   icmp6hdr->icmp6_code = 0;
   p = (void *) (icmp6hdr + 1);
   store_bytes(&p, (void *)&v6->my_v6addr[i], sizeof(v6->my_v6addr[i]));
@@ -353,17 +374,86 @@ void send_dad(v6_stack_t *v6, int i) {
   store_be16(&p, ETH_P_IPV6);
 
   debug(DBG_V6, 20, "Sending DAD");
-  debug_dump(DBG_V6, 25, d->buf, d->dsize);
+  debug_dump(DBG_V6, 125, d->buf, d->dsize);
   sock_send_data(v6_idx, d);
 }
 
+uint8_t *get_icmp6_opt_source_mac(struct sk_buff *skb) {
+  struct ipv6hdr *v6hdr = ipv6_hdr(skb);
+  struct icmp6hdr *icmp6hdr = (void *) (v6hdr + 1);
+  uint8_t *p = (void *) (icmp6hdr+1);
+  uint8_t *pe = skb->data + skb->len;
+  p += sizeof(v6hdr->saddr);
+  debug(DBG_V6, 10, "Getting Source MAC");
+  debug_dump(DBG_V6, 10, p, pe-p);
+  while (p < pe) {
+    if (*p == 1) {
+      p++;
+      if (*p == 1) {
+        return ++p;
+      }
+      return NULL;
+    } else {
+      p++;
+      p += (8* (*p))-1;
+    }
+  }
+  return NULL;
+  
+}
+
+void ndisc_recv_ns(struct sk_buff *skb, v6_stack_t *v6) {
+  dbuf_t *d = make_ll_icmp6(v6);
+  uint8_t *p;
+  uint8_t *dmac = NULL;
+  int i = 0; // FIXME: parse which of our addresses is it!
+  struct ipv6hdr *v6hdr = (void *)(d->buf + ETHER_SIZE);
+  struct icmp6hdr *icmp6hdr = (void *) (v6hdr + 1);
+  debug(DBG_V6, 20, "Received NS");
+
+  ipv6_addr_copy(&v6hdr->daddr, &ipv6_hdr(skb)->saddr);
+  ipv6_addr_copy(&v6hdr->saddr, &v6->my_v6addr[i]);
+
+  icmp6hdr->icmp6_type = NDISC_NEIGHBOUR_ADVERTISEMENT;
+  icmp6hdr->icmp6_code = 0;
+  icmp6hdr->icmp6_solicited = 1;
+  icmp6hdr->icmp6_override = 1;
+  p = (void *) (icmp6hdr + 1);
+  store_bytes(&p, (void *)&v6->my_v6addr[i], sizeof(v6->my_v6addr[i]));
+  store_Xbytes(&p, 2, 1);
+  store_Xbytes(&p, 1, 1);
+  store_mac(&p, v6->my_mac);
+
+  v6hdr->payload_len = ntohs(((uint8_t *)p) - ((uint8_t *)icmp6hdr));
+  d->dsize = ((uint8_t *)p) - ((uint8_t *)v6hdr) + ETHER_SIZE;
+
+
+  icmp6hdr->icmp6_cksum = icmp6_sum(d);
+
+  p = d->buf;
+  dmac = get_icmp6_opt_source_mac(skb);
+  if(!dmac) { 
+    debug(DBG_V6, 1, "No LL address option, using source MAC from NS");
+    dmac = &skb->dbuf->buf[6];
+  }
+  store_mac(&p, dmac);
+  store_mac(&p, v6->my_mac);
+  store_be16(&p, ETH_P_IPV6);
+
+  debug(DBG_V6, 20, "Sending NA");
+  // debug_dump(DBG_V6, 25, d->buf, d->dsize);
+  sock_send_data(v6_idx, d);
+
+}
+
+uint32_t rs_interval = 1000;
 
 void v6_stack_periodic(v6_stack_t *v6) {
   uint64_t now = get_time_msec();
   int i;
-  set_debug_level(DBG_V6, 1000);
+  set_debug_level(DBG_V6, 100);
 
-  debug(DBG_V6, 100, "Periodic... now: %lld", now);
+  // debug(DBG_V6, 100, "Periodic... now: %lld", now);
 
   if (v6->my_v6addr_state[0] == V6_NONE) {
     pcap_socket_info_t *psi = get_pcap_socket_info(v6_idx);
@@ -394,7 +484,8 @@ void v6_stack_periodic(v6_stack_t *v6) {
     /* If link-local address is active, check if we need to send RA, etc. */
     if (now > v6->when_send_rs) {
       v6_send_rs(v6);
-      v6->when_send_rs = now + 2000;
+      v6->when_send_rs = now + rs_interval;
+      rs_interval *= 2;
     }
   }
   /* Run a DAD cycle if needed */
@@ -414,6 +505,21 @@ void v6_stack_periodic(v6_stack_t *v6) {
 
 }
 
+void swap_mem(void *xp1, void *xp2, int n) {
+  uint8_t c;
+  uint8_t *p1 = xp1;
+  uint8_t *p2 = xp2;
+  
+  int i;
+  for(i=0; i<n; i++) {
+    c = *p2;
+    *p2 = *p1;
+    *p1 = c;
+    p1++;
+    p2++;
+  }
+}
+
 /*
  * Process all incoming IPv6 packets,
  * React on the IPv6 ND,
@@ -423,17 +529,62 @@ void v6_stack_periodic(v6_stack_t *v6) {
 
 int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
   struct ipv6hdr *v6hdr = ipv6_hdr(skb);
+  struct icmp6hdr *icmp6h;
+  struct in6_addr tmp_addr6;
+  uint16_t proto;
   int i;
 
-  assert(skb->protocol == ETH_P_IPV6);
+  BUG_ON(skb->protocol != ETH_P_IPV6);
+
+  if (
+       (ipv6_addr_type(&v6hdr->daddr) & IPV6_ADDR_MULTICAST) &&
+       (ipv6_addr_scope(&v6hdr->daddr) & IPV6_ADDR_LINKLOCAL)
+     ) { 
+    debug(DBG_V6, 40, "LL Multicast packet received");
+    if(v6hdr->nexthdr == NEXTHDR_ICMP) { 
+      icmp6h = (void*) skb->data;
+      skb_pull(skb, sizeof(struct icmp6hdr));
+      switch(icmp6h->icmp6_type) {
+        case NDISC_NEIGHBOUR_SOLICITATION:
+          ndisc_recv_ns(skb, v6);
+      }
+    }
+    return 0;
+  }
+
   for(i=0; i<MAX_V6ADDR; i++) {
-    if ((ipv6_addr_type(&v6hdr->saddr) & IPV6_ADDR_UNICAST)) {
+    if ((ipv6_addr_type(&v6hdr->daddr) & IPV6_ADDR_UNICAST)) {
       if( (ipv6_addr_cmp(&v6->my_v6addr[i], &v6hdr->daddr) == 0) &&
           (v6->my_v6addr_state[i] >= V6_TENTATIVE) ) {
-	if(ipv6_addr_scope(&v6hdr->daddr) == IPV6_ADDR_LINKLOCAL) {
+        debug(DBG_V6, 40, "Unicast packet received, scope: %02x", ipv6_addr_scope(&v6hdr->daddr));
+	if(ipv6_addr_scope(&v6hdr->daddr) & IPV6_ADDR_LINKLOCAL) {
           /*
            * To-us packet with link-local destination.
            */
+          proto = v6hdr->nexthdr;
+          switch(proto) {
+            case NEXTHDR_ICMP:
+              icmp6h = (void*) skb->data;
+              skb_pull(skb, sizeof(struct icmp6hdr));
+              switch(icmp6h->icmp6_type) {
+                case NDISC_NEIGHBOUR_SOLICITATION:
+                  ndisc_recv_ns(skb, v6);
+                  break;
+                case ICMPV6_ECHO_REQUEST:
+                  swap_mem(&v6hdr->saddr, &v6hdr->daddr, sizeof(v6hdr->daddr));
+                  swap_mem(&skb->dbuf->buf[0], &skb->dbuf->buf[6], 6);
+                  icmp6h->icmp6_type++;
+                  icmp6h->icmp6_cksum--; // FIXME: this is wrong.
+                  dlock(skb->dbuf); // send unlocks the data.
+                  sock_send_data(v6_idx, skb->dbuf);
+                  break;
+                default:
+                  debug(DBG_V6, 0, "ICMP6 type %d is not supported", icmp6h->icmp6_type);
+              }
+              break;
+            default:
+              debug(DBG_V6, 0, "Next header %d is not supported", proto);
+          }
 	} else {
 	  /*
            * Non-link-local packet to one of our addresses.
@@ -483,7 +634,10 @@ void handle_v4_packet(dbuf_t *d) {
   v6_stack_periodic(&v6_main_stack);
   if (d->buf[5] == 0x45) {
     sk.protocol = ETH_P_IP;
-    sk.l3_offset = 5;
+    sk.l3_offset = 4;
+    // FIXME: parse IPv4 header
+    sk.data = sk.dbuf->buf + sk.l3_offset + 20;
+    sk.len = sk.dbuf->dsize - (sk.l3_offset + 20);
     debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     nat64_ipv4_input(&sk);
   }
@@ -498,6 +652,9 @@ void handle_v6_packet(dbuf_t *d) {
   if (sk.protocol == ETH_P_IPV6) {
     // debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     sk.l3_offset = ETHER_SIZE;
+    // FIXME: parse IPv6 header
+    sk.data = sk.dbuf->buf + sk.l3_offset + sizeof(struct ipv6hdr);
+    sk.len = sk.dbuf->dsize - (sk.l3_offset + sizeof(struct ipv6hdr));
     if (need_to_process_v6(&sk, &v6_main_stack)) {
       nat64_ipv6_input(&sk);
     }

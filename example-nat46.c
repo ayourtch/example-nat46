@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     set_debug_level(DBG_GLOBAL, 1000);
   */
 
-  pcapi = attach_pcap(argv[1]);
+  pcapi = attach_pcap_with_filter(argv[1], "ip6");
   set_v6_idx(pcapi);
 
   tuni = attach_tun_interface(NULL);
@@ -55,11 +55,10 @@ int main(int argc, char *argv[]) {
   hdl = cdata_get_handlers(pcapi);
   hdl->ev_read = pcap_read_ev;
   while(1) {
-    if (timeout == 0) { 
+    if (timeout <= 10) { 
       timeout = 1000;
     }
     timeout = sock_one_cycle(timeout, NULL);
-    debug(0,10, ".");
   }
 }
 
