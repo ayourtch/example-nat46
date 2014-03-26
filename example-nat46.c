@@ -21,15 +21,11 @@ int pcapi;
 
 
 int tun_read_ev(int idx, dbuf_t *d, void *p) {
-  printf("Got packet on tunnel!\n");
-  debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
   handle_v4_packet(d);
   return d->dsize;
 }
 
 int pcap_read_ev(int idx, dbuf_t *d, void *p) {
-  printf("Got packet on pcap!\n");
-  debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
   handle_v6_packet(d);
   return d->dsize;
 }
@@ -63,7 +59,7 @@ int main(int argc, char *argv[]) {
       timeout = 1000;
     }
     timeout = sock_one_cycle(timeout, NULL);
-    debug(0,0, ".");
+    debug(0,10, ".");
   }
 }
 

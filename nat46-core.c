@@ -11,6 +11,12 @@
 
 
 void nat64_ipv6_input(struct sk_buff *old_skb) {
+  if (old_skb->protocol != htons(ETH_P_IPV6)) {
+    return;
+  }
 }
 void nat64_ipv4_input(struct sk_buff *old_skb) {
+  if (old_skb->protocol != htons(ETH_P_IP)) {
+    return;
+  }
 }
