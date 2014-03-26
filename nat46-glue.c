@@ -762,7 +762,6 @@ void handle_v6_packet(dbuf_t *d) {
     sk.data = sk.dbuf->buf + sk.l3_offset;
     sk.len = sk.dbuf->dsize - sk.l3_offset;
     if (need_to_process_v6(&sk, &v6_main_stack)) {
-      debug(DBG_V6, 10, "Incoming packet for NAT64");
       nat46_ipv6_input(&sk);
     }
   }
