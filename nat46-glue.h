@@ -2,6 +2,8 @@
 
 #include "lk-types.h"
 
+debug_type_t DBG_V6;
+
 void nat46_glue_periodic(void);
 
 int route_ipv4(struct sk_buff *skb);

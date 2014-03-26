@@ -111,7 +111,7 @@ int __ipv6_addr_type(const struct in6_addr *addr)
                 IPV6_ADDR_SCOPE_TYPE(IPV6_ADDR_SCOPE_GLOBAL));  /* addr-select 3.4 */
 }
 
-static inline int ipv6_addr_type(const struct in6_addr *addr)
+int ipv6_addr_type(const struct in6_addr *addr)
 {
         return __ipv6_addr_type(addr) & 0xffff;
 }
@@ -193,7 +193,7 @@ static inline unsigned char *__skb_pull(struct sk_buff *skb, unsigned int len) {
         return skb->data += len;
 }
 
-static inline unsigned char *skb_pull(struct sk_buff *skb, unsigned int len) {
+unsigned char *skb_pull(struct sk_buff *skb, unsigned int len) {
         return unlikely(len > skb->len) ? NULL : __skb_pull(skb, len);
 }
 
@@ -745,7 +745,7 @@ void handle_v4_packet(dbuf_t *d) {
     sk.data = sk.dbuf->buf + sk.l3_offset;
     sk.len = sk.dbuf->dsize - (sk.l3_offset);
     debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
-    nat64_ipv4_input(&sk);
+    nat46_ipv4_input(&sk);
   }
 }
 
@@ -763,7 +763,7 @@ void handle_v6_packet(dbuf_t *d) {
     sk.len = sk.dbuf->dsize - sk.l3_offset;
     if (need_to_process_v6(&sk, &v6_main_stack)) {
       debug(DBG_V6, 10, "Incoming packet for NAT64");
-      nat64_ipv6_input(&sk);
+      nat46_ipv6_input(&sk);
     }
   }
   v6_stack_periodic(&v6_main_stack);
