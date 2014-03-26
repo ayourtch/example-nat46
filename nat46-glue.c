@@ -457,8 +457,7 @@ void ndisc_recv_ra(struct sk_buff *skb, v6_stack_t *v6) {
   uint8_t *pe = skb->data + skb->len;
   int i;
 
-  p += 4;
-  p += 4;
+  /* p += 4; p += 4; */
   debug(DBG_V6, 10, "RA options:");
   while (p < pe) {
     debug(DBG_V6, 10, "  Option %d", *p);
@@ -494,6 +493,10 @@ void ndisc_recv_ra(struct sk_buff *skb, v6_stack_t *v6) {
         break; 
     }
     p++;
+    if (0 == *p) {
+      debug(DBG_V6, 1, "An option with zero length, exit the parsing...");
+      return;
+    }
     p += (8* (*p))-1;
   }
 
@@ -674,6 +677,7 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
           ndisc_recv_ns(skb, v6);
           break;
         case NDISC_ROUTER_ADVERTISEMENT:
+          skb_pull(skb, sizeof(struct icmp6hdr));
           ndisc_recv_ra(skb, v6);
           break;
       }
@@ -693,13 +697,15 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
           proto = v6hdr->nexthdr;
           switch(proto) {
             case NEXTHDR_ICMP:
+              skb_pull(skb, sizeof(struct ipv6hdr));
               icmp6h = (void*) skb->data;
               switch(icmp6h->icmp6_type) {
                 case NDISC_NEIGHBOUR_SOLICITATION:
-                  skb_pull(skb, sizeof(struct ipv6hdr));
+                  skb_pull(skb, sizeof(struct icmp6hdr));
                   ndisc_recv_ns(skb, v6);
                   break;
                 case NDISC_ROUTER_ADVERTISEMENT:
+                  skb_pull(skb, sizeof(struct icmp6hdr));
                   ndisc_recv_ra(skb, v6);
                   break;
                 case ICMPV6_ECHO_REQUEST:
@@ -787,8 +793,8 @@ void handle_v4_packet(dbuf_t *d) {
 
 
 void handle_v6_packet(dbuf_t *d) {
-
   struct sk_buff sk;
+
   sk.dbuf = d;
   sk.protocol = (*(uint16_t *)(&d->buf[12]));
   if (sk.protocol == htons(ETH_P_IPV6)) {
