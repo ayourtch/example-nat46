@@ -39,9 +39,7 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  /*
-    set_debug_level(DBG_GLOBAL, 1000);
-  */
+  /* set_debug_level(DBG_GLOBAL, 3); */
 
   pcapi = attach_pcap_with_filter(argv[1], "ip6");
   set_v6_idx(pcapi);
@@ -59,6 +57,7 @@ int main(int argc, char *argv[]) {
       timeout = 1000;
     }
     timeout = sock_one_cycle(timeout, NULL);
+    nat46_glue_periodic();
   }
 }
 

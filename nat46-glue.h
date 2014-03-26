@@ -2,6 +2,8 @@
 
 #include "lk-types.h"
 
+void nat46_glue_periodic(void);
+
 int route_ipv4(struct sk_buff *skb);
 int route_ipv6(struct sk_buff *skb);
 void set_v4_idx(int idx);
