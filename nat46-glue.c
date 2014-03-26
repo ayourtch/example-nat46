@@ -658,12 +658,12 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
   int i;
 
   BUG_ON(skb->protocol != htons(ETH_P_IPV6));
-  skb_pull(skb, sizeof(struct ipv6hdr));
 
   if (
        (ipv6_addr_type(&v6hdr->daddr) & IPV6_ADDR_MULTICAST) &&
        (ipv6_addr_scope(&v6hdr->daddr) & IPV6_ADDR_LINKLOCAL)
      ) { 
+    skb_pull(skb, sizeof(struct ipv6hdr));
     debug(DBG_V6, 40, "LL Multicast packet received");
     if(v6hdr->nexthdr == NEXTHDR_ICMP) { 
       icmp6h = (void*) skb->data;
@@ -686,6 +686,7 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
            * To-us packet with link-local destination.
            */
           proto = v6hdr->nexthdr;
+          skb_pull(skb, sizeof(struct ipv6hdr));
           switch(proto) {
             case NEXTHDR_ICMP:
               icmp6h = (void*) skb->data;
@@ -711,6 +712,7 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
             default:
               debug(DBG_V6, 0, "Next header %d is not supported", proto);
           }
+          return 0;
 	} else {
 	  /*
            * Non-link-local packet to one of our addresses.
@@ -739,11 +741,14 @@ int route_ipv4(struct sk_buff *skb) {
 }
 
 int route_ipv6(struct sk_buff *skb) {
+  skb->dbuf->dsize = skb->len+14;
   dprepend(skb->dbuf, 14);
   memcpy(&skb->dbuf->buf[0], v6_main_stack.gw_mac, 6);
   memcpy(&skb->dbuf->buf[6], v6_main_stack.my_mac, 6);
-  skb->dbuf->buf[12] = 0xdd;
-  skb->dbuf->buf[13] = 0x86;
+  skb->dbuf->buf[12] = 0x86;
+  skb->dbuf->buf[13] = 0xdd;
+  debug(DBG_V6, 10, "About to send the V6 packet on the wire:");
+  debug_dump(DBG_V6, 20, skb->dbuf->buf, skb->dbuf->dsize);
   sock_send_data(v6_idx, skb->dbuf);
   return 1;
 }
