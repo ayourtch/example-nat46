@@ -1,4 +1,4 @@
-all: example-nat46 test-nat46-core
+all: example-nat46 test-nat46-core test
 CC=gcc
 CFLAGS=-Wall -I.. -g -Wno-unused-function
 LDFLAGS=-L .. -lay -lpcap
@@ -14,6 +14,15 @@ example-nat46: $(OBJECTS)
 test-nat46-core: $(TEST_OBJS)
 	$(CC) $(CFLAGS) $(TEST_OBJS) -o test-nat46-core $(LDFLAGS)
 
+gen-test: test-nat46-core
+	./test-nat46-core 2>result-test-nat46-core.txt
+
+test: gen-test
+	diff -c result-test-nat46-core-saved.txt result-test-nat46-core.txt
+
+test-save: gen-test
+	rm -f result-test-nat46-core-saved.txt
+	mv result-test-nat46-core.txt result-test-nat46-core-saved.txt
 
 .PHONY: clean
 clean:
