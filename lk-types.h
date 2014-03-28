@@ -69,6 +69,7 @@ struct sock {
 typedef uint32_t u32;
 typedef uint32_t __u32;
 typedef uint8_t __u8;
+typedef uint8_t u8;
 typedef uint16_t __u16;
 typedef uint16_t __sum16;
 typedef int atomic_t;
@@ -372,5 +373,7 @@ int ipv6_addr_type(const struct in6_addr *addr);
 struct ipv6hdr *ipv6_hdr(struct sk_buff *skb);
 unsigned char *skb_pull(struct sk_buff *skb, unsigned int len);
 struct sk_buff *alloc_skb(unsigned int size, gfp_t priority);
+long simple_strtol(const char *cp, char **endp, unsigned int base);
+int in6_pton(const char *src, int srclen, u8 *dst, int delim, const char **end);
 
 #endif

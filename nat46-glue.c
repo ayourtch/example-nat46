@@ -25,6 +25,14 @@ debug_type_t DBG_V6 = &DBG_V6_S;
  *
  */
 
+long simple_strtol(const char *cp, char **endp, unsigned int base) {
+  return strtol(cp, endp, base);
+}
+
+int in6_pton(const char *src, int srclen, u8 *dst, int delim, const char **end) {
+   return inet_pton(AF_INET6, src, dst); 
+}
+
 struct iphdr *ip_hdr(struct sk_buff *skb) {
   return ((struct iphdr *) &skb->dbuf->buf[skb->l3_offset]);
 }
@@ -748,7 +756,12 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
 nat46_instance_t single_nat46;
 
 nat46_instance_t *get_nat46_instance(struct sk_buff *skb) {
+  /* In kernel this will also lock */
   return &single_nat46;
+}
+
+void release_nat46_instance(nat46_instance_t *nat46) {
+  /* In kernel this will unlock */
 }
 
 int route_ipv4(struct sk_buff *skb) {
