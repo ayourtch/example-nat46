@@ -745,6 +745,11 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
  */
 
 
+nat46_instance_t single_nat46;
+
+nat46_instance_t *get_nat46_instance(struct sk_buff *skb) {
+  return &single_nat46;
+}
 
 int route_ipv4(struct sk_buff *skb) {
   sock_send_data(v4_idx, skb->dbuf);

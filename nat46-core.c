@@ -22,7 +22,7 @@ void xxx_swap_mem(void *ip1, void *ip2, int cnt) {
   }
 }
 
-void nat46_handle_icmp6(struct sk_buff *old_skb, struct ipv6hdr *ip6h) {
+void nat46_handle_icmp6(nat46_instance_t *nat46, struct sk_buff *old_skb, struct ipv6hdr *ip6h) {
   struct icmp6hdr *icmp6h = NULL;
   struct ipv6hdr *v6new  = NULL;
   struct sk_buff *new_skb = NULL;
@@ -52,7 +52,7 @@ void nat46_handle_icmp6(struct sk_buff *old_skb, struct ipv6hdr *ip6h) {
 }
 
 
-int ip6_input_not_interested(struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
+int ip6_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
   if (old_skb->protocol != htons(ETH_P_IPV6)) {
     nat46debug(3, "Not an IPv6 packet", 0);
     return 1;
@@ -70,11 +70,12 @@ int ip6_input_not_interested(struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
 
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
+  nat46_instance_t *nat46 = get_nat46_instance(old_skb);
   uint16_t proto;
 
   nat46debug(1, "nat46_ipv6_input packet", 0);
 
-  if(ip6_input_not_interested(ip6h, old_skb)) {
+  if(ip6_input_not_interested(nat46, ip6h, old_skb)) {
     nat46debug(1, "nat46_ipv6_input not interested", 0);
     return;
   }
@@ -91,7 +92,7 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
       break;
     case NEXTHDR_ICMP:
       nat46debug(1, "nat46 ICMP6 packet", 0);
-      nat46_handle_icmp6(old_skb, ip6h);
+      nat46_handle_icmp6(nat46, old_skb, ip6h);
       break;
     default:
       nat46debug(3, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);

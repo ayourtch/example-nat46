@@ -3,10 +3,13 @@
 #define __V6_GLUE_H__
 
 #include "lk-types.h"
+#include "nat46-core.h"
 
 debug_type_t DBG_V6;
 
 void nat46_glue_periodic(void);
+
+nat46_instance_t *get_nat46_instance(struct sk_buff *skb);
 
 int route_ipv4(struct sk_buff *skb);
 int route_ipv6(struct sk_buff *skb);
