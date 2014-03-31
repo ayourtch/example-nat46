@@ -4,7 +4,6 @@
 
 #include <netinet/in.h>
 #include <netinet/ip6.h>
-#include <netinet/tcp.h>
 
 #include "nat46-glue.h"
 #include "nat46-core.h"
@@ -154,7 +153,7 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
 
   if(ip6_input_not_interested(nat46, ip6h, old_skb)) {
     nat46debug(1, "nat46_ipv6_input not interested", 0);
-    return;
+    goto done;
   }
   nat46debug(1, "nat46_ipv6_input next hdr: %d, len: %d", 
                 ip6h->nexthdr, old_skb->len);
@@ -176,12 +175,53 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
       goto done;
   }
 
-  
 done:
   release_nat46_instance(nat46);
 }
 
-int ip4_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *iph, struct sk_buff *old_skb) {
+
+
+void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
+{
+  u16 sum1=0;
+  u16 sum2=0;
+  __sum16 oldsum = 0;
+
+  switch (ip6hdr->nexthdr) {
+    case IPPROTO_TCP: {
+      struct tcphdr *th = tcp_hdr(skb);
+      unsigned tcplen = 0;
+
+      oldsum = th->check;
+      tcplen = ntohs(ip6hdr->payload_len); /* TCP header + payload */
+      th->check = 0;
+      sum1 = csum_partial((char*)th, tcplen, 0); /* calculate checksum for TCP hdr+payload */
+      sum2 = csum_ipv6_magic(&ip6hdr->saddr, &ip6hdr->daddr, tcplen, ip6hdr->nexthdr, sum1); /* add pseudoheader */
+      th->check = sum2;
+      break;
+      }
+    case IPPROTO_UDP: {
+      struct udphdr *udp = udp_hdr(skb);
+      unsigned udplen = ntohs(ip6hdr->payload_len); /* UDP hdr + payload */
+
+      oldsum = udp->check;
+      udp->check = 0;
+
+      sum1 = csum_partial((char*)udp, udplen, 0); /* calculate checksum for UDP hdr+payload */
+      sum2 = csum_ipv6_magic(&ip6hdr->saddr, &ip6hdr->daddr, udplen, ip6hdr->nexthdr, sum1); /* add pseudoheader */
+
+      udp->check = sum2;
+
+      break;
+      }
+    case IPPROTO_ICMP:
+      break;
+    }
+}
+
+
+
+int ip4_input_not_interested(nat46_instance_t *nat46, struct iphdr *iph, struct sk_buff *old_skb) {
   if (old_skb->protocol != htons(ETH_P_IP)) {
     nat46debug(3, "Not an IPv4 packet", 0);
     return 1;
@@ -191,13 +231,81 @@ int ip4_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *iph, struc
 
 void nat46_ipv4_input(struct sk_buff *old_skb) {
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
-  struct iphdr *iph = ip_hdr(old_skb);
+  struct sk_buff *new_skb;
 
-  if (ip4_input_not_interested(nat46, iph, old_skb)) {
-    return;
+  int err = -1;
+  int tclass = 0;
+  int flowlabel = 0;
+  int len;
+
+  struct ipv6hdr * hdr6;
+  struct iphdr * hdr4 = ip_hdr(old_skb);
+
+  char v6saddr[16], v6daddr[16];
+
+  if (ip4_input_not_interested(nat46, hdr4, old_skb)) {
+    goto done;
   }
   nat46debug(1, "nat46_ipv6_input packet", 0);
 
+  if (ntohs(hdr4->tot_len) > 1480) {
+    // FIXME: need to send Packet Too Big here.
+    goto done; 
+  }
+
+  switch(hdr4->protocol) {
+    case NEXTHDR_TCP:
+    case NEXTHDR_UDP:
+    case NEXTHDR_ICMP:
+      break;
+    default:
+      nat46debug(3, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP are supported.", hdr4->protocol);
+      goto done;
+  }
+
+  new_skb = skb_copy(old_skb, GFP_ATOMIC);
+
+  /* Remove any debris in the socket control block */
+  memset(IPCB(new_skb), 0, sizeof(struct inet_skb_parm));
+
+  /* expand header (add 20 extra bytes at the beginning of sk_buff) */
+  pskb_expand_head(new_skb, 20, 0, GFP_ATOMIC);
+
+  skb_push(new_skb, sizeof(struct ipv6hdr) - sizeof(struct iphdr)); /* push boundary by extra 20 bytes */
+
+  skb_reset_network_header(new_skb);
+  skb_set_transport_header(new_skb, 40); /* transport (TCP/UDP/ICMP/...) header starts after 40 bytes */
+
+  hdr6 = ipv6_hdr(new_skb);
+
+  /* build IPv6 header */
+  tclass = 0; /* traffic class */
+  *(__be32 *)hdr6 = htonl(0x60000000 | (tclass << 20)) | flowlabel; /* version, priority, flowlabel */
+
+  /* IPv6 length is a payload length, IPv4 is hdr+payload */
+  hdr6->payload_len = htons(ntohs(hdr4->tot_len) - sizeof(struct iphdr)); 
+
+  hdr6->nexthdr = hdr4->protocol;
+  hdr6->hop_limit = hdr4->ttl;
+  memcpy(&hdr6->saddr, v6saddr, 16);
+  memcpy(&hdr6->daddr, v6daddr, 16);
+
+  new_skb->priority = old_skb->priority;
+  // new_skb->mark = old_skb->mark;
+  new_skb->protocol = htons(ETH_P_IPV6);
+
+  ip6_update_csum(new_skb, hdr6);
+
+  ip6_route_input(new_skb);
+  if (skb_dst(new_skb) == NULL) {
+    // FIXME: FREE SKB if no destination ?
+    goto done;
+  }
+
+  // FIXME: check if you can not fit the packet into the cached MTU
+  // if (dst_mtu(skb_dst(new_skb))==0) { }
+
+  err = ip6_forward(new_skb);
 
 done:
   release_nat46_instance(nat46);

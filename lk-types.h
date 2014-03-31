@@ -1,8 +1,12 @@
 #ifndef __LK_TYPES_H__
 #define __LK_TYPES_H__
 
-#include <stdint.h>
 #include <netinet/in.h>
+#include <netinet/ip6.h>
+
+
+#include <stdint.h>
+//#include <netinet/in.h>
 #include <assert.h>
 
 #include "dbuf-ay.h"
@@ -71,6 +75,7 @@ typedef uint32_t __u32;
 typedef uint8_t __u8;
 typedef uint8_t u8;
 typedef uint16_t __u16;
+typedef uint16_t u16;
 typedef uint16_t __sum16;
 typedef int atomic_t;
 typedef int bool;
@@ -131,6 +136,40 @@ __be64	cpu_to_be64p(const __u64 *);
 #define ntohl(x) be32_to_cpu(x)
 
 */
+
+struct ip_options {
+  __be32          faddr;
+  __be32          nexthop;
+  unsigned char   optlen;
+  unsigned char   srr;
+  unsigned char   rr;
+  unsigned char   ts;
+  unsigned char   is_strictroute:1,
+                  srr_is_hit:1,
+                  is_changed:1,
+                  rr_needaddr:1,
+                  ts_needtime:1,
+                  ts_needaddr:1;
+  unsigned char   router_alert;
+  unsigned char   cipso;
+  unsigned char   __pad2;
+  unsigned char   __data[0];
+};
+
+struct inet_skb_parm {
+  struct ip_options       opt;            /* Compiled IP options          */
+  unsigned char           flags;
+
+#define IPSKB_FORWARDED         1
+#define IPSKB_XFRM_TUNNEL_SIZE  2
+#define IPSKB_XFRM_TRANSFORMED  4
+#define IPSKB_FRAG_COMPLETE     8
+#define IPSKB_REROUTED          16
+
+  u16                     frag_max_size;
+};
+
+#define IPCB(skb) ((struct inet_skb_parm*)((skb)->cb))
 
 struct sk_buff {
   struct sk_buff * next;
@@ -367,6 +406,51 @@ struct icmp6hdr {
  */
 #define ICMPV6_EXC_HOPLIMIT             0
 #define ICMPV6_EXC_FRAGTIME             1
+
+
+struct udphdr {
+  __be16  source;
+  __be16  dest;
+  __be16  len;
+  __sum16 check;
+};
+
+
+struct tcphdr {
+        __be16  source;
+        __be16  dest;
+        __be32  seq;
+        __be32  ack_seq;
+#if defined(__LITTLE_ENDIAN_BITFIELD)
+        __u16   res1:4,
+                doff:4,
+                fin:1,
+                syn:1,
+                rst:1,
+                psh:1,
+                ack:1,
+                urg:1,
+                ece:1,
+                cwr:1;
+#elif defined(__BIG_ENDIAN_BITFIELD)
+        __u16   doff:4,
+                res1:4,
+                cwr:1,
+                ece:1,
+                urg:1,
+                ack:1,
+                psh:1,
+                rst:1,
+                syn:1,
+                fin:1;
+#else
+#error  "Adjust your <asm/byteorder.h> defines"
+#endif  
+        __be16  window;
+        __sum16 check;
+        __be16  urg_ptr;
+};
+
 
 
 int ipv6_addr_type(const struct in6_addr *addr);
