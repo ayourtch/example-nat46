@@ -102,7 +102,7 @@ void nat46_handle_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk
   struct sk_buff *new_skb = NULL;
   struct icmp6hdr *icmp6new = NULL;
 
-  icmp6h = (struct icmphdr *)old_skb->data;
+  icmp6h = (struct icmp6hdr *)old_skb->data;
   skb_pull(old_skb, sizeof(struct icmp6hdr));
   nat46debug(5, "ICMP6 type: %d", icmp6h->icmp6_type);
 
