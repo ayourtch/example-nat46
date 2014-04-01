@@ -25,7 +25,6 @@ void xxx_swap_mem(void *ip1, void *ip2, int cnt) {
 /* return the current arg, and advance the tail to the next space-separated word */
 static char *get_next_arg(char **ptail) {
   char *pc = NULL;
-  char *pc2;
   while ((*ptail) && (**ptail) && ((**ptail == ' ') || (**ptail == '\n'))) { 
     **ptail = 0;
     (*ptail)++;
@@ -113,13 +112,13 @@ void nat46_handle_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk
       memcpy(new_skb->data, ip6h, sizeof(*ip6h));
       memcpy(new_skb->data + sizeof(*ip6h), icmp6h, sizeof(*icmp6h));
       memcpy(new_skb->data + sizeof(*ip6h) + sizeof(*icmp6h), old_skb->data, old_skb->len);
-      v6new = new_skb->data;
+      v6new = (void *)new_skb->data;
       xxx_swap_mem(&v6new->saddr, &v6new->daddr, 16);
-      icmp6new = new_skb->data + sizeof(*ip6h);
+      icmp6new = (void *)(new_skb->data + sizeof(*ip6h));
       icmp6new->icmp6_cksum--;
       icmp6new->icmp6_type++;
       
-      route_ipv6(new_skb);
+      ip6_forward(new_skb);
       break;
   }
 
@@ -236,7 +235,6 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   int err = -1;
   int tclass = 0;
   int flowlabel = 0;
-  int len;
 
   struct ipv6hdr * hdr6;
   struct iphdr * hdr4 = ip_hdr(old_skb);
@@ -297,10 +295,12 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   ip6_update_csum(new_skb, hdr6);
 
   ip6_route_input(new_skb);
+/*
   if (skb_dst(new_skb) == NULL) {
     // FIXME: FREE SKB if no destination ?
     goto done;
   }
+*/
 
   // FIXME: check if you can not fit the packet into the cached MTU
   // if (dst_mtu(skb_dst(new_skb))==0) { }

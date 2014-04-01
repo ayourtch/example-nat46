@@ -71,6 +71,7 @@ struct sock {
 };
 
 typedef uint32_t u32;
+typedef uint32_t __wsum;
 typedef uint32_t __u32;
 typedef uint8_t __u8;
 typedef uint8_t u8;
@@ -222,9 +223,15 @@ struct sk_buff {
   __u32 secmark;
 #endif
   dbuf_t *dbuf; /* reference to dbuf inner type */
-  int l3_offset;
-  int l4_offset;
-  int l5_offset;
+  union {
+    __u32           mark;
+    __u32           dropcount;
+    __u32           reserved_tailroom;
+  };
+
+  __u16                   transport_header;
+  __u16                   network_header;
+  __u16                   mac_header;
 
   unsigned int truesize;
   atomic_t users;
@@ -459,5 +466,22 @@ unsigned char *skb_pull(struct sk_buff *skb, unsigned int len);
 struct sk_buff *alloc_skb(unsigned int size, gfp_t priority);
 long simple_strtol(const char *cp, char **endp, unsigned int base);
 int in6_pton(const char *src, int srclen, u8 *dst, int delim, const char **end);
+__wsum csum_partial(const void *p, int len, __wsum __sum);
+int ip6_forward(struct sk_buff *skb);
+void ip6_route_input(struct sk_buff *skb);
+unsigned char *skb_push(struct sk_buff *skb, unsigned int len);
+struct sk_buff *skb_copy(const struct sk_buff *skb, gfp_t gfp_mask);
+void skb_reset_network_header(struct sk_buff *skb);
+int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask);
+void skb_set_transport_header(struct sk_buff *skb, const int offset);
+struct iphdr *ip_hdr(struct sk_buff *skb);
+struct udphdr *udp_hdr(const struct sk_buff *skb);
+struct tcphdr *tcp_hdr(const struct sk_buff *skb);
+__sum16 csum_ipv6_magic(const struct in6_addr *saddr,
+                        const struct in6_addr *daddr,
+                        __u32 len, unsigned short proto,
+                        __wsum csum);
+
+
 
 #endif

@@ -18,13 +18,11 @@ int v6_idx;
 struct debug_type DBG_V6_S = { "ipv6", "IPV6", 0, 0 };
 debug_type_t DBG_V6 = &DBG_V6_S;
 
-
 /*
  *
  * Linux look-alike functions.
  *
  */
-
 long simple_strtol(const char *cp, char **endp, unsigned int base) {
   return strtol(cp, endp, base);
 }
@@ -33,13 +31,6 @@ int in6_pton(const char *src, int srclen, u8 *dst, int delim, const char **end) 
    return inet_pton(AF_INET6, src, dst); 
 }
 
-struct iphdr *ip_hdr(struct sk_buff *skb) {
-  return ((struct iphdr *) &skb->dbuf->buf[skb->l3_offset]);
-}
-
-struct ipv6hdr *ipv6_hdr(struct sk_buff *skb) {
-  return ((struct ipv6hdr *) &skb->dbuf->buf[skb->l3_offset]);
-}
 
 __be32 s6_addr32(const struct in6_addr *addr, int i) {
   int s = 4*i;
@@ -49,7 +40,7 @@ __be32 s6_addr32(const struct in6_addr *addr, int i) {
          (addr->s6_addr[0+s] << 24));
 }
 
-static inline unsigned int ipv6_addr_scope2type(unsigned int scope)
+ unsigned int ipv6_addr_scope2type(unsigned int scope)
 {
         switch (scope) {
         case IPV6_ADDR_SCOPE_NODELOCAL:
@@ -124,17 +115,17 @@ int ipv6_addr_type(const struct in6_addr *addr)
         return __ipv6_addr_type(addr) & 0xffff;
 }
 
-static inline int ipv6_addr_scope(const struct in6_addr *addr)
+ int ipv6_addr_scope(const struct in6_addr *addr)
 {
         return __ipv6_addr_type(addr) & IPV6_ADDR_SCOPE_MASK;
 }
 
-static inline int __ipv6_addr_src_scope(int type)
+ int __ipv6_addr_src_scope(int type)
 {
         return (type == IPV6_ADDR_ANY) ? __IPV6_ADDR_SCOPE_INVALID : (type >> 16);
 }
 
-static inline int ipv6_addr_src_scope(const struct in6_addr *addr)
+ int ipv6_addr_src_scope(const struct in6_addr *addr)
 {
         return __ipv6_addr_src_scope(__ipv6_addr_type(addr));
 }
@@ -146,24 +137,24 @@ bool ipv6_addr_all_hosts(const struct in6_addr *addr) {
            (s6_addr32(addr, 3) == 1) );
 }
 
-static inline bool __ipv6_addr_needs_scope_id(int type)
+ bool __ipv6_addr_needs_scope_id(int type)
 {
         return type & IPV6_ADDR_LINKLOCAL ||
                (type & IPV6_ADDR_MULTICAST &&
                 (type & (IPV6_ADDR_LOOPBACK|IPV6_ADDR_LINKLOCAL)));
 }
 
-static inline __u32 ipv6_iface_scope_id(const struct in6_addr *addr, int iface)
+ __u32 ipv6_iface_scope_id(const struct in6_addr *addr, int iface)
 {
         return __ipv6_addr_needs_scope_id(__ipv6_addr_type(addr)) ? iface : 0;
 }
 
-static inline int ipv6_addr_cmp(const struct in6_addr *a1, const struct in6_addr *a2)
+ int ipv6_addr_cmp(const struct in6_addr *a1, const struct in6_addr *a2)
 {
         return memcmp(a1, a2, sizeof(struct in6_addr));
 }
 
-static inline bool
+ bool
 ipv6_masked_addr_cmp(const struct in6_addr *a1, const struct in6_addr *m,
                      const struct in6_addr *a2)
 {
@@ -175,13 +166,13 @@ ipv6_masked_addr_cmp(const struct in6_addr *a1, const struct in6_addr *m,
                  );
 }
 
-static inline void ipv6_addr_copy(struct in6_addr *a1, const struct in6_addr *a2)
+ void ipv6_addr_copy(struct in6_addr *a1, const struct in6_addr *a2)
 {
         memcpy(a1, a2, sizeof(struct in6_addr));
 }
 
 
-static inline void ipv6_addr_prefix(struct in6_addr *pfx,
+ void ipv6_addr_prefix(struct in6_addr *pfx,
                                     const struct in6_addr *addr,
                                     int plen)
 {
@@ -195,7 +186,7 @@ static inline void ipv6_addr_prefix(struct in6_addr *pfx,
                 pfx->s6_addr[o] = addr->s6_addr[o] & (0xff00 >> b);
 }
 
-static inline unsigned char *__skb_pull(struct sk_buff *skb, unsigned int len) {
+ unsigned char *__skb_pull(struct sk_buff *skb, unsigned int len) {
         skb->len -= len;
         BUG_ON(skb->len < skb->data_len);
         return skb->data += len;
@@ -226,6 +217,122 @@ struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
     return NULL;
   }
   return sk;
+}
+
+__sum16 csum_fold(__u32 sum) {
+  while (sum>>16) {
+    sum = (sum & 0xFFFF)+(sum >> 16);
+  }
+  sum = ~sum;
+  return htons(sum);
+}
+
+__sum16 csum_ipv6_magic(const struct in6_addr *saddr,
+                        const struct in6_addr *daddr,
+                        __u32 len, unsigned short proto,
+                        __wsum csum) {
+
+  int i;
+  __u32 ulen;
+  __u32 uproto;
+  __u32 sum = (u32)csum;
+
+  for(i=0;i<4;i++) {
+    sum += s6_addr32(saddr, i);
+    sum += (sum < s6_addr32(saddr, i));
+    sum += s6_addr32(daddr, i);
+    sum += (sum < s6_addr32(daddr, i));
+  } 
+
+  ulen = (__u32) htonl(len);
+  sum += ulen;
+  sum += (sum < ulen);
+  
+  uproto = (__u32) htonl(proto);
+  sum += uproto;
+  sum += (sum < uproto);
+
+  return csum_fold(sum);
+}
+
+__wsum csum_partial(const void *p, int len, __wsum __sum) {
+  u32 sum = (u32)__sum;
+  u16 *buf = (u16 *)p;
+  int i;
+  for(i=0;i<(len/2);i++) {
+    sum += *buf++;
+  }
+  if (len % 2) {
+    sum += ( *((char *)buf) );
+  }
+  return sum;
+}
+
+void ip6_route_input(struct sk_buff *skb) {
+  // FIXME
+}
+
+int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) {
+  // FIXME
+}
+
+struct sk_buff *skb_copy(const struct sk_buff *skb, gfp_t gfp_mask) {
+  // FIXME
+
+}
+
+unsigned char *skb_push(struct sk_buff *skb, unsigned int len) {
+  skb->data -= len;
+  skb->len  += len;
+  return skb->data;
+}
+
+unsigned char *skb_transport_header(const struct sk_buff *skb)
+{
+        return skb->head + skb->transport_header;
+}
+
+void skb_reset_transport_header(struct sk_buff *skb)
+{
+        skb->transport_header = skb->data - skb->head;
+}
+
+void skb_set_transport_header(struct sk_buff *skb, const int offset)
+{
+        skb_reset_transport_header(skb);
+        skb->transport_header += offset;
+}
+
+unsigned char *skb_network_header(const struct sk_buff *skb)
+{
+        return skb->head + skb->network_header;
+}
+
+void skb_reset_network_header(struct sk_buff *skb)
+{
+        skb->network_header = skb->data - skb->head;
+}
+
+void skb_set_network_header(struct sk_buff *skb, const int offset)
+{
+        skb_reset_network_header(skb);
+        skb->network_header += offset;
+}
+
+struct tcphdr *tcp_hdr(const struct sk_buff *skb) {
+  return (struct tcphdr *)skb_transport_header(skb);
+}
+
+struct udphdr *udp_hdr(const struct sk_buff *skb) {
+  return (struct udphdr *)skb_transport_header(skb);
+}
+
+struct iphdr *ip_hdr(struct sk_buff *skb) {
+  return ((struct iphdr *) &skb->dbuf->buf[skb->network_header]);
+}
+
+struct ipv6hdr *ipv6_hdr(struct sk_buff *skb) {
+  return ((struct ipv6hdr *) &skb->dbuf->buf[skb->network_header]);
 }
 
 
@@ -665,7 +772,6 @@ void swap_mem(void *xp1, void *xp2, int n) {
 int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
   struct ipv6hdr *v6hdr = ipv6_hdr(skb);
   struct icmp6hdr *icmp6h;
-  struct in6_addr tmp_addr6;
   uint16_t proto;
   int i;
 
@@ -769,7 +875,7 @@ int route_ipv4(struct sk_buff *skb) {
   return 1;
 }
 
-int route_ipv6(struct sk_buff *skb) {
+int ip6_forward(struct sk_buff *skb) {
   skb->dbuf->dsize = skb->len+14;
   dprepend(skb->dbuf, 14);
   memcpy(&skb->dbuf->buf[0], v6_main_stack.gw_mac, 6);
@@ -801,9 +907,9 @@ void handle_v4_packet(dbuf_t *d) {
   v6_stack_periodic(&v6_main_stack);
   if (d->buf[4] == 0x45) {
     sk.protocol = htons(ETH_P_IP);
-    sk.l3_offset = 4;
-    sk.data = sk.dbuf->buf + sk.l3_offset;
-    sk.len = sk.dbuf->dsize - (sk.l3_offset);
+    sk.network_header = 4;
+    sk.data = sk.dbuf->buf + sk.network_header;
+    sk.len = sk.dbuf->dsize - (sk.network_header);
     debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     nat46_ipv4_input(&sk);
   }
@@ -817,10 +923,10 @@ void handle_v6_packet(dbuf_t *d) {
   sk.protocol = (*(uint16_t *)(&d->buf[12]));
   if (sk.protocol == htons(ETH_P_IPV6)) {
     // debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
-    sk.l3_offset = ETHER_SIZE;
+    sk.network_header = ETHER_SIZE;
     // FIXME: parse IPv6 header
-    sk.data = sk.dbuf->buf + sk.l3_offset;
-    sk.len = sk.dbuf->dsize - sk.l3_offset;
+    sk.data = sk.dbuf->buf + sk.network_header;
+    sk.len = sk.dbuf->dsize - sk.network_header;
     if (need_to_process_v6(&sk, &v6_main_stack)) {
       nat46_ipv6_input(&sk);
     }

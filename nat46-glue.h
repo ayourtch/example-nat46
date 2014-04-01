@@ -11,9 +11,9 @@ debug_type_t DBG_V6;
 void nat46_glue_periodic(void);
 
 nat46_instance_t *get_nat46_instance(struct sk_buff *skb);
+void release_nat46_instance(nat46_instance_t *nat46);
 
 int route_ipv4(struct sk_buff *skb);
-int route_ipv6(struct sk_buff *skb);
 void set_v4_idx(int idx);
 void set_v6_idx(int idx);
 void handle_v4_packet(dbuf_t *d);
