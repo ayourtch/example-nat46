@@ -21,6 +21,65 @@ void xxx_swap_mem(void *ip1, void *ip2, int cnt) {
   }
 }
 
+void
+nat46debug_dump(int level, void *addr, int len)
+{
+  char tohex[] = "0123456789ABCDEF";
+  int i = 0;
+  int k = 0;
+  unsigned char *pc = addr;
+
+  char buf0[32];                // offset
+  char buf1[64];                // hex
+  char buf2[64];                // literal
+
+  char *pc1;
+  char *pc2;
+
+  while(--len >= 0) {
+    if(i % 16 == 0) {
+      for(k=0; k<8; k++) {
+        buf0[7-k] = tohex[ 0xf & (i >> k) ];
+      }
+      buf0[8] = 0;
+      buf1[0] = 0;
+      buf2[0] = 0;
+      pc1 = buf1;
+      pc2 = buf2;
+    }
+    *pc1++ = tohex[*pc >> 4];
+    *pc1++ = tohex[*pc & 15];
+    *pc1++ = ' ';
+
+    if(*pc >= 32 && *pc < 127) {
+      *pc2++ = *pc;
+    } else {
+      *pc2++ = '.';
+    }
+    i++;
+    pc++;
+    if(i % 16 == 0) {
+      *pc1 = 0;
+      *pc2 = 0;
+      nat46debug(level, "%s:   %s  %s", buf0, buf1, buf2);
+    }
+
+  }
+  if(i % 16 != 0) {
+    while(i % 16 != 0) {
+      *pc1++ = ' ';
+      *pc1++ = ' ';
+      *pc1++ = ' ';
+      *pc2++ = ' ';
+      i++;
+    }
+    *pc1 = 0;
+    *pc2 = 0;
+    nat46debug(level, "%s:   %s  %s", buf0, buf1, buf2);
+  }
+}
+
+
 
 /* return the current arg, and advance the tail to the next space-separated word */
 static char *get_next_arg(char **ptail) {
@@ -242,10 +301,14 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
 
   char v6saddr[16], v6daddr[16];
 
+  memset(v6saddr, 1, 16);
+  memset(v6daddr, 2, 16);
+
   if (ip4_input_not_interested(nat46, hdr4, old_skb)) {
     goto done;
   }
-  nat46debug(1, "nat46_ipv6_input packet", 0);
+  nat46debug(1, "nat46_ipv4_input packet", 0);
+  nat46debug_dump(1, old_skb->data, old_skb->len);
 
   if (ntohs(hdr4->tot_len) > 1480) {
     // FIXME: need to send Packet Too Big here.
@@ -253,9 +316,9 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   }
 
   switch(hdr4->protocol) {
-    case NEXTHDR_TCP:
-    case NEXTHDR_UDP:
-    case NEXTHDR_ICMP:
+    case IPPROTO_TCP:
+    case IPPROTO_UDP:
+    case IPPROTO_ICMP:
       break;
     default:
       nat46debug(3, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP are supported.", hdr4->protocol);
@@ -276,6 +339,7 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   skb_set_transport_header(new_skb, 40); /* transport (TCP/UDP/ICMP/...) header starts after 40 bytes */
 
   hdr6 = ipv6_hdr(new_skb);
+  memset(hdr6, 0, sizeof(*hdr6));
 
   /* build IPv6 header */
   tclass = 0; /* traffic class */

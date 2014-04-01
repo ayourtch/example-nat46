@@ -207,20 +207,21 @@ void skb_reserve(struct sk_buff *skb, int len) {
  */
 
 struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
-  unsigned int sz = (10 + (size/8))*8;
-  struct sk_buff *sk = NULL;
-  dbuf_t *d = dalloc(sz + sizeof(struct sk_buff));
+  unsigned int sz = size;
+  struct sk_buff *sk = malloc(sizeof(struct sk_buff));
 
-  if (d) {
-    d->dsize = d->size;
-    sk = (void *)&d->buf[sz];
+  if (sk) {
+    dbuf_t *d = dalloc(sz);
+
+    memset(sk, 0, sizeof(*sk));
     sk->dbuf = d;
+    d->user_struct = sk;
+
+    d->dsize = d->size;
     sk->data = d->buf;
     sk->head = d->buf;
     sk->len = size;
     sk->tail = sk->data + size;
-  } else {
-    return NULL;
   }
   return sk;
 }
@@ -279,17 +280,32 @@ void ip6_route_input(struct sk_buff *skb) {
 }
 
 int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) {
-  /* The head should already have enough space for all the purposes. NOOP */
+  int data_offs = skb->data - skb->head;
+  int tail_offs = skb->tail - skb->head;
+
+  if (nhead > 0) {
+    dprepend(skb->dbuf, nhead);
+  }
+  if (ntail > 0) {
+    dgrow(skb->dbuf, nhead);
+  }
+  skb->head = skb->dbuf->buf;
+  skb->data = skb->head + data_offs + nhead;
+  skb->tail = skb->head + tail_offs;
+  skb->end = skb->head + skb->dbuf->size;
   return 0;
 }
 
 struct sk_buff *skb_copy(const struct sk_buff *skb, gfp_t gfp_mask) {
-  struct sk_buff *sknew = alloc_skb(skb->end - skb->head, gfp_mask);
-  memcpy(sknew->head, skb->head, skb->end - skb->head);
+  struct sk_buff *sknew = alloc_skb(skb->end - skb->data, gfp_mask);
+  memcpy(sknew->data, skb->data, skb->end - skb->data);
   return sknew; 
 }
 
 unsigned char *skb_push(struct sk_buff *skb, unsigned int len) {
+  if (skb->data - len < skb->head) {
+    pskb_expand_head(skb, len, 0, GFP_ATOMIC);
+  }
   skb->data -= len;
   skb->len  += len;
   return skb->data;
@@ -916,8 +932,11 @@ void handle_v4_packet(dbuf_t *d) {
   if (d->buf[4] == 0x45) {
     sk.protocol = htons(ETH_P_IP);
     sk.network_header = 4;
+    sk.head = sk.dbuf->buf;
+    sk.end = sk.dbuf->buf + sk.dbuf->dsize;
     sk.data = sk.dbuf->buf + sk.network_header;
     sk.len = sk.dbuf->dsize - (sk.network_header);
+    sk.tail = sk.end;
     debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     nat46_ipv4_input(&sk);
   }
