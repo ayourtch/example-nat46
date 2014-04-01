@@ -9,6 +9,7 @@
 debug_type_t DBG_V6;
 
 void nat46_glue_periodic(void);
+void nat46_conf(char *cfg_str);
 
 nat46_instance_t *get_nat46_instance(struct sk_buff *skb);
 void release_nat46_instance(nat46_instance_t *nat46);

@@ -760,6 +760,15 @@ void v6_stack_periodic(v6_stack_t *v6) {
       if(v6->when_send_dad[i] < now) {
         if(v6->my_v6_addr_dad_attempts[i] == 0) {
           v6->my_v6addr_state[i] = V6_PREFERRED;
+          if(i == 1) {
+            nat46_instance_t *nat46 = get_nat46_instance(NULL);
+            /* The globally routable address is active. Setup NAT46 */
+
+            memcpy(&nat46->my_v6bits, &v6->my_v6addr[i], 16);
+            memset(&nat46->my_v6mask, 0xff, 16);
+            nat46_conf("nat64pref 64:ff9b::/96");
+            release_nat46_instance(nat46);
+          }
         } else {
           send_dad(v6, i);
           v6->my_v6_addr_dad_attempts[i]--;
@@ -922,6 +931,17 @@ void set_v6_idx(int idx) {
 
 void nat46_glue_periodic(void) {
   v6_stack_periodic(&v6_main_stack);
+}
+
+void nat46_conf(char *cfg_str) {
+  nat46_instance_t *nat46 = get_nat46_instance(NULL);
+  char *buf = malloc(strlen(cfg_str) + 1);
+  memcpy(buf, cfg_str, strlen(cfg_str) + 1);
+
+  debug(DBG_GLOBAL, 0, "Configuring the nat46 instance from string: %s", buf);
+  nat46_set_config(nat46, buf, strlen(buf));
+  debug_dump(DBG_GLOBAL, 0, nat46, sizeof(*nat46));
+  free(buf);
 }
 
 
