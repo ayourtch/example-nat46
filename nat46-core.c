@@ -243,7 +243,7 @@ done:
 
 void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
 {
-  u16 sum1=0;
+  u32 sum1=0;
   u16 sum2=0;
   __sum16 oldsum = 0;
 

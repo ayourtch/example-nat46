@@ -231,7 +231,16 @@ __sum16 csum_fold(__u32 sum) {
     sum = (sum & 0xFFFF)+(sum >> 16);
   }
   sum = ~sum;
-  return htons(sum);
+  return sum;
+  // ? return htons(sum);
+}
+
+__u32 add32(__u32 a, __u32 b) {
+  __u32 sum = a + b;
+  if((sum < a) || (sum < b)) {
+    sum++;
+  }
+  return sum;
 }
 
 __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
@@ -245,19 +254,15 @@ __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
   __u32 sum = (u32)csum;
 
   for(i=0;i<4;i++) {
-    sum += s6_addr32(saddr, i);
-    sum += (sum < s6_addr32(saddr, i));
-    sum += s6_addr32(daddr, i);
-    sum += (sum < s6_addr32(daddr, i));
+    sum = add32(sum, s6_addr32(saddr, i));
+    sum = add32(sum, s6_addr32(daddr, i));
   } 
 
   ulen = (__u32) htonl(len);
-  sum += ulen;
-  sum += (sum < ulen);
+  sum = add32(sum, ulen);
   
   uproto = (__u32) htonl(proto);
-  sum += uproto;
-  sum += (sum < uproto);
+  sum = add32(sum, uproto);
 
   return csum_fold(sum);
 }
