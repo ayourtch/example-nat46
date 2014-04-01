@@ -134,6 +134,8 @@ int nat46_set_config(nat46_instance_t *nat46, char *buf, int count) {
   while ((0 == err) && (NULL != (arg_name = get_next_arg(&tail)))) {
     if (0 == strcmp(arg_name, "debug")) {
       nat46->debug = simple_strtol(get_next_arg(&tail), NULL, 10);
+    } else if (0 == strcmp(arg_name, "nat64pref")) {
+      err = try_parse_ipv6_prefix(&nat46->nat64pref, &nat46->nat64pref_len, get_next_arg(&tail)); 
     } else if (0 == strcmp(arg_name, "v6bits")) {
       err = try_parse_ipv6_prefix(&nat46->my_v6bits, NULL, get_next_arg(&tail)); 
     } else if (0 == strcmp(arg_name, "v6mask")) {
@@ -278,6 +280,68 @@ void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
 }
 
 
+/********************************************************************
+
+From RFC6052, section 2.2:
+
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |PL| 0-------------32--40--48--56--64--72--80--88--96--104---------|
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |32|     prefix    |v4(32)         | u | suffix                    |
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |40|     prefix        |v4(24)     | u |(8)| suffix                |
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |48|     prefix            |v4(16) | u | (16)  | suffix            |
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |56|     prefix                |(8)| u |  v4(24)   | suffix        |
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |64|     prefix                    | u |   v4(32)      | suffix    |
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+    |96|     prefix                                    |    v4(32)     |
+    +--+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+
+********************************************************************/
+
+void v4_to_nat64(nat46_instance_t *nat46, void *pipv4, void *pipv6) {
+  char *ipv4 = pipv4;
+  char *ipv6 = pipv6;
+
+  /* 'u' byte and suffix are zero */ 
+  memset(&ipv6[8], 0, 8); 
+  switch(nat46->nat64pref_len) {
+    case 32:
+      memcpy(ipv6, &nat46->nat64pref, 4);
+      memcpy(&ipv6[4], ipv4, 4);
+      break;
+    case 40:
+      memcpy(ipv6, &nat46->nat64pref, 5);
+      memcpy(&ipv6[5], ipv4, 3);
+      ipv6[9] = ipv4[3];
+      break;
+    case 48:
+      memcpy(ipv6, &nat46->nat64pref, 6);
+      ipv6[6] = ipv4[0];
+      ipv6[7] = ipv4[1];
+      ipv6[9] = ipv4[2];
+      ipv6[10] = ipv4[3];
+      break;
+    case 56:
+      memcpy(ipv6, &nat46->nat64pref, 7);
+      ipv6[7] = ipv4[0];
+      ipv6[9] = ipv4[1];
+      ipv6[10] = ipv4[2];
+      ipv6[11] = ipv4[3];
+      break;
+    case 64:
+      memcpy(ipv6, &nat46->nat64pref, 8);
+      memcpy(&ipv6[9], ipv4, 4);
+      break;
+    case 96:
+      memcpy(ipv6, &nat46->nat64pref, 12);
+      memcpy(&ipv6[12], ipv4, 4);
+      break;
+  }
+}
 
 int ip4_input_not_interested(nat46_instance_t *nat46, struct iphdr *iph, struct sk_buff *old_skb) {
   if (old_skb->protocol != htons(ETH_P_IP)) {
@@ -303,6 +367,8 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
 
   memset(v6saddr, 1, 16);
   memset(v6daddr, 2, 16);
+  v4_to_nat64(nat46, &hdr4->daddr, v6daddr);
+  memcpy(v6saddr, &nat46->my_v6bits, 16);
 
   if (ip4_input_not_interested(nat46, hdr4, old_skb)) {
     goto done;

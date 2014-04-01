@@ -11,6 +11,8 @@ typedef struct {
   /* Fixed portion of the IPv6 address on my side */
   struct in6_addr my_v6bits;
   struct in6_addr my_v6mask;
+  struct in6_addr nat64pref;
+  int nat64pref_len;
 } nat46_instance_t;
 
 void nat46_ipv6_input(struct sk_buff *old_skb);
