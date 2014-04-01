@@ -15,6 +15,7 @@
 #include "dbuf-ay.h"
 #include "sock-ay.h"
 #include "sock-pcap-ay.h"
+#include "sock-cli.h"
 
 int tuni;
 int pcapi;
@@ -31,10 +32,9 @@ int pcap_read_ev(int idx, dbuf_t *d, void *p) {
 }
 
 int cli_read_ev(int idx, dbuf_t *di, void *p) {
-  int i;
   char *op;
   dbuf_t *d = NULL;
-  char *cmd = di->buf;
+  char *cmd = (void *)di->buf;
   debug(0,0, "Cmd: '%s'", cmd);
   if (NULL == cmd) {
     return 1;
@@ -54,7 +54,7 @@ int cli_read_ev(int idx, dbuf_t *di, void *p) {
     printf("\n\n\n");
     exit(1);
   }
-
+/*
   if (0 == strcmp(op, "r")) {
     uint32_t xid = atol(strtok(NULL, " "));
     uint16_t offs = atoi(strtok(NULL, " "));
@@ -62,6 +62,7 @@ int cli_read_ev(int idx, dbuf_t *di, void *p) {
     char *data = strtok(NULL, " ");
     char *now_s = strtok(NULL, " ");
   }
+*/
   return (d ? d->dsize : 0) || 1;
 }
 

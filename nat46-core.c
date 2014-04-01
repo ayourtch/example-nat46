@@ -226,6 +226,7 @@ int ip4_input_not_interested(nat46_instance_t *nat46, struct iphdr *iph, struct 
     return 1;
   }
   // FIXME: check source to be within our prefix
+  return 0;
 }
 
 void nat46_ipv4_input(struct sk_buff *old_skb) {

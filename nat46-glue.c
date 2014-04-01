@@ -201,6 +201,11 @@ void skb_reserve(struct sk_buff *skb, int len) {
         skb->tail += len;
 }
 
+/*
+ * For SKB, we use a dbuf, with the skb in the very end of the data portion.
+ * This kind of defeats the purpose of the data structure, but is good enough for now.
+ */
+
 struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
   unsigned int sz = (10 + (size/8))*8;
   struct sk_buff *sk = NULL;
@@ -211,6 +216,7 @@ struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
     sk = (void *)&d->buf[sz];
     sk->dbuf = d;
     sk->data = d->buf;
+    sk->head = d->buf;
     sk->len = size;
     sk->tail = sk->data + size;
   } else {
@@ -273,12 +279,14 @@ void ip6_route_input(struct sk_buff *skb) {
 }
 
 int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) {
-  // FIXME
+  /* The head should already have enough space for all the purposes. NOOP */
+  return 0;
 }
 
 struct sk_buff *skb_copy(const struct sk_buff *skb, gfp_t gfp_mask) {
-  // FIXME
-
+  struct sk_buff *sknew = alloc_skb(skb->end - skb->head, gfp_mask);
+  memcpy(sknew->head, skb->head, skb->end - skb->head);
+  return sknew; 
 }
 
 unsigned char *skb_push(struct sk_buff *skb, unsigned int len) {
