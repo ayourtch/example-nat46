@@ -948,10 +948,11 @@ void release_nat46_instance(nat46_instance_t *nat46) {
 }
 
 int ip_forward(struct sk_buff *skb) {
+  memmove(skb->dbuf->buf, skb->data, skb->len);
   skb->dbuf->dsize = skb->len+4;
   dprepend(skb->dbuf, 4);
   memset(skb->dbuf->buf, 0, 4);
-  skb->dbuf->buf[4] = 2;
+  skb->dbuf->buf[3] = 2;
   debug(DBG_V6, 10, "About to send the V4 packet on the wire:");
   debug_dump(DBG_V6, 20, skb->dbuf->buf, skb->dbuf->dsize);
   sock_send_data(v4_idx, skb->dbuf);
