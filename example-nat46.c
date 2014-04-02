@@ -84,12 +84,12 @@ int main(int argc, char *argv[]) {
 
   tuni = attach_tun_interface(NULL);
   set_v4_idx(tuni);
-
-  cli = attach_cli(attach_stdin(1));
+/*
+  cli = attach_cli(attach_stdin(0));
   hdl = cdata_get_handlers(cli);
   hdl->ev_read = cli_read_ev;
   debug(0,0, "Press Ctrl-C to quit");
-
+*/
 
   set_debug_level(DBG_GLOBAL, 0); 
 

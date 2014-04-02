@@ -202,8 +202,9 @@ void skb_reserve(struct sk_buff *skb, int len) {
 }
 
 /*
- * For SKB, we use a dbuf, with the skb in the very end of the data portion.
- * This kind of defeats the purpose of the data structure, but is good enough for now.
+ * We use the newly added "user data structure" within dbuf 
+ * for skb. It's freed together with the dbuf, so we do not need
+ * to think of memory management.
  */
 
 struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
@@ -757,6 +758,7 @@ void v6_stack_periodic(v6_stack_t *v6) {
   uint64_t now = get_time_msec();
   int i;
   set_debug_level(DBG_V6, 100);
+  set_debug_level(DBG_V6, 0);
 
   // debug(DBG_V6, 100, "Periodic... now: %lld", now);
 
@@ -810,7 +812,12 @@ void v6_stack_periodic(v6_stack_t *v6) {
 
             memcpy(&nat46->my_v6bits, &v6->my_v6addr[i], 16);
             memset(&nat46->my_v6mask, 0xff, 16);
-            nat46_conf("nat64pref 64:ff9b::/96");
+            // nat46_conf("nat64pref 64:ff9b::/96");
+            // Go6 ASR1k
+            nat46_conf("nat64pref 2001:67c:27e4:11::/96");
+            // PAN
+            // nat46_conf("nat64pref 2001:67c:27e4:64::/96");
+            nat46_conf("nat64pref 2001:67c:27e4:641::/96");
             release_nat46_instance(nat46);
           }
         } else {
@@ -1008,7 +1015,7 @@ void handle_v4_packet(dbuf_t *d) {
     sk.data = sk.dbuf->buf + sk.network_header;
     sk.len = sk.dbuf->dsize - (sk.network_header);
     sk.tail = sk.end;
-    debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
+    debug_dump(DBG_GLOBAL, 30, d->buf, d->dsize);
     nat46_ipv4_input(&sk);
   }
 }

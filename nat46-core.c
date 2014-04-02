@@ -258,6 +258,9 @@ int ip6_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *ip6h, stru
   return 0;
 }
 
+
+__u32 xxx_my_v4addr;
+
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
@@ -298,8 +301,8 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   }
 
 
-  v4saddr = 0x01010101;
-  v4daddr = 0x02020202;
+  nat64_to_v4(nat46, &hdr->saddr, &v4saddr);
+  v4daddr = xxx_my_v4addr;
 
   copy = skb_copy(old_skb, GFP_ATOMIC); // other possible option: GFP_ATOMIC
 
@@ -446,6 +449,64 @@ void v4_to_nat64(nat46_instance_t *nat46, void *pipv4, void *pipv6) {
   }
 }
 
+int nat64_to_v4(nat46_instance_t *nat46, void *pipv6, void *pipv4) {
+  char *ipv4 = pipv4;
+  char *ipv6 = pipv6;
+  int cmp = -1;
+  switch(nat46->nat64pref_len) {
+    case 32:
+      cmp = memcmp(ipv6, &nat46->nat64pref, 4);
+      break;
+    case 40:
+      cmp = memcmp(ipv6, &nat46->nat64pref, 5);
+      break;
+    case 48:
+      cmp = memcmp(ipv6, &nat46->nat64pref, 6);
+      break;
+    case 56:
+      cmp = memcmp(ipv6, &nat46->nat64pref, 7);
+      break;
+    case 64:
+      cmp = memcmp(ipv6, &nat46->nat64pref, 8);
+      break;
+    case 96:
+      cmp = memcmp(ipv6, &nat46->nat64pref, 12);
+      break;
+  }
+  if (cmp) {
+    /* Not in NAT64 prefix */
+    return 0;
+  }
+  switch(nat46->nat64pref_len) {
+    case 32:
+      memcpy(ipv4, &ipv6[4], 4);
+      break;
+    case 40:
+      memcpy(ipv4, &ipv6[5], 3);
+      ipv4[3] = ipv6[9];
+      break;
+    case 48:
+      ipv4[0] = ipv6[6];
+      ipv4[1] = ipv6[7];
+      ipv4[2] = ipv6[9];
+      ipv4[3] = ipv6[10];
+      break;
+    case 56:
+      ipv4[0] = ipv6[7];
+      ipv4[1] = ipv6[9];
+      ipv4[2] = ipv6[10];
+      ipv4[3] = ipv6[11];
+      break;
+    case 64:
+      memcpy(ipv4, &ipv6[9], 4);
+      break;
+    case 96:
+      memcpy(ipv4, &ipv6[12], 4);
+      break;
+  }
+  return 1;
+}
+
 int ip4_input_not_interested(nat46_instance_t *nat46, struct iphdr *iph, struct sk_buff *old_skb) {
   if (old_skb->protocol != htons(ETH_P_IP)) {
     nat46debug(3, "Not an IPv4 packet", 0);
@@ -472,6 +533,7 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   memset(v6daddr, 2, 16);
   v4_to_nat64(nat46, &hdr4->daddr, v6daddr);
   memcpy(v6saddr, &nat46->my_v6bits, 16);
+  memcpy(&xxx_my_v4addr, &hdr4->saddr, 4);
 
   if (ip4_input_not_interested(nat46, hdr4, old_skb)) {
     goto done;
