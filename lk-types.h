@@ -287,6 +287,18 @@ struct ipv6hdr {
         struct  in6_addr        daddr;
 } __attribute__((__aligned__(1)));
 
+/* IP flags. */
+#define IP_CE           0x8000          /* Flag: "Congestion"           */
+#define IP_DF           0x4000          /* Flag: "Don't Fragment"       */
+#define IP_MF           0x2000          /* Flag: "More Fragments"       */
+#define IP_OFFSET       0x1FFF          /* "Fragment Offset" part       */
+
+#define CHECKSUM_NONE 0
+#define CHECKSUM_UNNECESSARY 1
+#define CHECKSUM_COMPLETE 2
+#define CHECKSUM_PARTIAL 3
+ 
+
 
 struct icmp6hdr {
 
@@ -481,7 +493,12 @@ __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
                         const struct in6_addr *daddr,
                         __u32 len, unsigned short proto,
                         __wsum csum);
+__sum16 ip_fast_csum(const void *iph, unsigned int ihl);
+__sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr, unsigned short len,
+                  unsigned short proto, __wsum sum);
 
+unsigned int ip_hdrlen(const struct sk_buff *skb);
+int ip_forward(struct sk_buff *skb);
 
 
 #endif

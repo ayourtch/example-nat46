@@ -156,6 +156,60 @@ int nat46_get_config(nat46_instance_t *nat46, char *buf, int count) {
 }
 
 
+void ipv4_update_csum(struct sk_buff * skb, struct iphdr *iph) {
+  __wsum sum1=0;
+  __sum16 sum2=0;
+  __sum16 oldsum=0;
+
+  int iphdrlen = ip_hdrlen(skb);
+
+  switch (iph->protocol) {
+    case IPPROTO_TCP: {
+      /* ripped from tcp_v4_send_check fro tcp_ipv4.c */
+      struct tcphdr *th = tcp_hdr(skb);
+      unsigned tcplen = 0;
+
+      /* printk(KERN_ALERT "iph=%p th=%p copy->len=%d, th->check=%x iphdrlen=%d thlen=%d\n",
+         iph, th, skb->len, ntohs(th->check), iphdrlen, thlen); */
+
+      skb->csum = 0;
+      skb->ip_summed = CHECKSUM_COMPLETE;
+
+      // calculate payload
+      oldsum = th->check;
+      th->check = 0;
+      tcplen = ntohs(iph->tot_len) - iphdrlen; /* skb->len - iphdrlen; (may cause trouble due to padding) */
+      sum1 = csum_partial((char*)th, tcplen, 0); /* calculate checksum for TCP hdr+payload */
+      sum2 = csum_tcpudp_magic(iph->saddr, iph->daddr, tcplen, iph->protocol, sum1); /* add pseudoheader */
+      th->check = sum2;
+      break;
+      }
+    case IPPROTO_UDP: {
+      struct udphdr *udp = udp_hdr(skb);
+      unsigned udplen = 0;
+
+      oldsum = udp->check;
+      udp->check = 0;
+      udplen = ntohs(iph->tot_len) - iphdrlen;
+
+      sum1 = csum_partial((char*)udp, udplen, 0);
+      sum2 = csum_tcpudp_magic(iph->saddr, iph->daddr, udplen, iph->protocol, sum1);
+      udp->check = sum2;
+
+      break;
+      }
+    case IPPROTO_ICMP: {
+      /* do nothing here. ICMP does not use pseudoheaders for checksum calculation. */
+      break;
+      }
+    default:
+      break;
+  }
+}
+
+
+
+
 void nat46_handle_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
   struct icmp6hdr *icmp6h = NULL;
   struct ipv6hdr *v6new  = NULL;
@@ -209,6 +263,14 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
   uint16_t proto;
 
+  struct ipv6hdr * hdr = ipv6_hdr(old_skb);
+  struct iphdr * iph;
+  char buf1[64], buf2[64], buf3[64], buf4[64];
+  __u32 v4saddr, v4daddr;
+  struct sk_buff * copy = 0;
+  int err = -1;
+  int truncSize = 0;
+
   nat46debug(1, "nat46_ipv6_input packet", 0);
 
   if(ip6_input_not_interested(nat46, ip6h, old_skb)) {
@@ -221,12 +283,12 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
 
   proto = ip6h->nexthdr;
   
-  skb_pull(old_skb, sizeof(struct ipv6hdr));
   switch(proto) {
     case NEXTHDR_TCP:
     case NEXTHDR_UDP:
       break;
     case NEXTHDR_ICMP:
+      skb_pull(old_skb, sizeof(struct ipv6hdr));
       nat46debug(1, "nat46 ICMP6 packet", 0);
       nat46_handle_icmp6(nat46, ip6h, old_skb);
       goto done;
@@ -234,6 +296,47 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
       nat46debug(3, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
       goto done;
   }
+
+
+  v4saddr = 0x01010101;
+  v4daddr = 0x02020202;
+
+  copy = skb_copy(old_skb, GFP_ATOMIC); // other possible option: GFP_ATOMIC
+
+  /* Remove any debris in the socket control block */
+  memset(IPCB(copy), 0, sizeof(struct inet_skb_parm));
+
+  /* modify packet: actual IPv6->IPv4 transformation */
+  truncSize = sizeof(struct ipv6hdr) - sizeof(struct iphdr); /* chop first 20 bytes */
+  skb_pull(copy, truncSize);
+  skb_reset_network_header(copy);
+  skb_set_transport_header(copy,20); /* transport (TCP/UDP/ICMP/...) header starts after 20 bytes */
+
+  /* build IPv4 header */
+  iph = ip_hdr(copy);
+  iph->ttl = hdr->hop_limit;
+  iph->saddr = v4saddr;
+  iph->daddr = v4daddr;
+  iph->protocol = hdr->nexthdr;
+  *((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (0x00/*tos*/ & 0xff));
+  iph->frag_off = htons(IP_DF);
+
+  /* iph->tot_len = htons(copy->len); // almost good, but it may cause troubles with sizeof(IPv6 pkt)<64 (padding issue) */
+  iph->tot_len = htons( ntohs(hdr->payload_len)+ 20 /*sizeof(ipv4hdr)*/ );
+  iph->check = 0;
+  iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
+  copy->protocol = htons(ETH_P_IP);
+
+  ipv4_update_csum(copy, iph); /* update L4 (TCP/UDP/ICMP) checksum */
+
+  /* try to find route for this packet */
+  err = ip_route_input(copy, v4daddr, v4saddr, 0, copy->dev);
+
+  if (err==0) {
+    err = ip_forward(copy);
+  }
+
+  /* TBD: should copy be released here? */
 
 done:
   release_nat46_instance(nat46);

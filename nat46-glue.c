@@ -212,16 +212,21 @@ struct sk_buff *alloc_skb(unsigned int size, gfp_t priority) {
 
   if (sk) {
     dbuf_t *d = dalloc(sz);
+    if (d) {
+      memset(sk, 0, sizeof(*sk));
+      sk->dbuf = d;
+      d->user_struct = sk;
 
-    memset(sk, 0, sizeof(*sk));
-    sk->dbuf = d;
-    d->user_struct = sk;
-
-    d->dsize = d->size;
-    sk->data = d->buf;
-    sk->head = d->buf;
-    sk->len = size;
-    sk->tail = sk->data + size;
+      d->dsize = d->size;
+      sk->data = d->buf;
+      sk->head = d->buf;
+      sk->len = size;
+      sk->tail = sk->data + size;
+    } else {
+      debug(0,0, "Could not allocate a dbuf of size %d\n", size);
+      free(sk);
+      sk = NULL;
+    }
   }
   return sk;
 }
@@ -241,6 +246,28 @@ __u32 add32(__u32 a, __u32 b) {
     sum++;
   }
   return sum;
+}
+
+__wsum csum_tcpudp_nofold(__be32 saddr, __be32 daddr,
+                         unsigned short len,
+                         unsigned short proto,
+                         __wsum sum) {
+  unsigned long long s = (u32)sum;
+
+  s += (u32)saddr;
+  s += (u32)daddr;
+#ifdef __BIG_ENDIAN
+  s += proto + len;
+#else
+  s += (proto + len) << 8;
+#endif
+  s += (s >> 32);
+  return (__wsum)s;
+}
+
+__sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr, unsigned short len,
+                  unsigned short proto, __wsum sum) {
+  return csum_fold(csum_tcpudp_nofold(saddr, daddr, len, proto, sum));
 }
 
 __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
@@ -280,8 +307,17 @@ __wsum csum_partial(const void *p, int len, __wsum __sum) {
   return sum;
 }
 
+__sum16 ip_fast_csum(const void *iph, unsigned int ihl) {
+  return csum_fold(csum_partial(iph, ihl*4, 0));
+}
+
 void ip6_route_input(struct sk_buff *skb) {
   // FIXME
+}
+
+int ip_route_input(struct sk_buff *skb, __be32 dst, __be32 src, u8 tos, struct net_device *devin) {
+  // FIXME
+  return 0;
 }
 
 int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) {
@@ -364,6 +400,9 @@ struct ipv6hdr *ipv6_hdr(struct sk_buff *skb) {
   return ((struct ipv6hdr *) &skb->dbuf->buf[skb->network_header]);
 }
 
+unsigned int ip_hdrlen(const struct sk_buff *skb) {
+  return ip_hdr((struct sk_buff *)skb)->ihl * 4;
+}
 
 /*
  *
@@ -908,7 +947,13 @@ void release_nat46_instance(nat46_instance_t *nat46) {
   /* In kernel this will unlock */
 }
 
-int route_ipv4(struct sk_buff *skb) {
+int ip_forward(struct sk_buff *skb) {
+  skb->dbuf->dsize = skb->len+4;
+  dprepend(skb->dbuf, 4);
+  memset(skb->dbuf->buf, 0, 4);
+  skb->dbuf->buf[4] = 2;
+  debug(DBG_V6, 10, "About to send the V4 packet on the wire:");
+  debug_dump(DBG_V6, 20, skb->dbuf->buf, skb->dbuf->dsize);
   sock_send_data(v4_idx, skb->dbuf);
   return 1;
 }
@@ -976,9 +1021,11 @@ void handle_v6_packet(dbuf_t *d) {
   if (sk.protocol == htons(ETH_P_IPV6)) {
     // debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     sk.network_header = ETHER_SIZE;
-    // FIXME: parse IPv6 header
+    sk.head = sk.dbuf->buf;
+    sk.end = sk.dbuf->buf + sk.dbuf->dsize;
     sk.data = sk.dbuf->buf + sk.network_header;
     sk.len = sk.dbuf->dsize - sk.network_header;
+    sk.tail = sk.end;
     if (need_to_process_v6(&sk, &v6_main_stack)) {
       nat46_ipv6_input(&sk);
     }
