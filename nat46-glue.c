@@ -758,7 +758,7 @@ void v6_stack_periodic(v6_stack_t *v6) {
   uint64_t now = get_time_msec();
   int i;
   set_debug_level(DBG_V6, 100);
-  set_debug_level(DBG_V6, 0);
+  // set_debug_level(DBG_V6, 0);
 
   // debug(DBG_V6, 100, "Periodic... now: %lld", now);
 
@@ -817,7 +817,9 @@ void v6_stack_periodic(v6_stack_t *v6) {
             nat46_conf("nat64pref 2001:67c:27e4:11::/96");
             // PAN
             // nat46_conf("nat64pref 2001:67c:27e4:64::/96");
-            nat46_conf("nat64pref 2001:67c:27e4:641::/96");
+            // Ecsdysis
+            // nat46_conf("nat64pref 2001:67c:27e4:641::/96");
+            //nat46_conf("nat64pref 64:ff9b::/96");
             release_nat46_instance(nat46);
           }
         } else {
@@ -1035,6 +1037,7 @@ void handle_v6_packet(dbuf_t *d) {
     sk.len = sk.dbuf->dsize - sk.network_header;
     sk.tail = sk.end;
     if (need_to_process_v6(&sk, &v6_main_stack)) {
+      debug(DBG_V6, 10, "handle_v6_packet: need to process");
       nat46_ipv6_input(&sk);
     }
   }

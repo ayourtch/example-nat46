@@ -298,6 +298,15 @@ struct ipv6hdr {
 #define CHECKSUM_COMPLETE 2
 #define CHECKSUM_PARTIAL 3
  
+struct frag_hdr {
+         __u8    nexthdr;
+         __u8    reserved;
+         __be16  frag_off;
+         __be32  identification;
+};
+ 
+#define IP6_MF          0x0001
+#define IP6_OFFSET      0xFFF8
 
 
 struct icmp6hdr {

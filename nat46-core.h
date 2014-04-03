@@ -3,8 +3,8 @@
 
 #include "nat46-glue.h"
 
-// #define nat46debug(level, format, ...) debug(DBG_V6, level, format, __VA_ARGS__)
-#define nat46debug(level, format, ...)
+#define nat46debug(level, format, ...) debug(DBG_V6, level, format, __VA_ARGS__)
+// #define nat46debug(level, format, ...)
 
 
 typedef struct {

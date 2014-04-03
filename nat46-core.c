@@ -261,6 +261,23 @@ int ip6_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *ip6h, stru
 
 __u32 xxx_my_v4addr;
 
+struct sk_buff *try_reassembly(struct sk_buff *old_skb) {
+  struct ipv6hdr * hdr = ipv6_hdr(old_skb);
+  struct frag_hdr *fh = (struct frag_hdr*)(hdr + 1);
+  nat46debug(1, "try_reassembly, frag_off value: %04x, nexthdr: %02x", fh->frag_off, fh->nexthdr);
+  if(fh->frag_off == 0) {
+    hdr->nexthdr = fh->nexthdr;
+    hdr->payload_len = htons(ntohs(hdr->payload_len) - sizeof(struct frag_hdr));
+    memmove(fh, (fh+1), old_skb->len - sizeof(struct frag_hdr));
+    old_skb->len -= sizeof(struct frag_hdr);
+    old_skb->end -= sizeof(struct frag_hdr);
+    old_skb->tail -= sizeof(struct frag_hdr);
+    nat46debug(1, "reassembly successful, %d bytes shorter!", sizeof(struct frag_hdr));
+    nat46debug_dump(1, old_skb->data, old_skb->len);
+  }
+  return old_skb;
+}
+
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
@@ -285,6 +302,14 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   debug_dump(DBG_V6, 1, old_skb->data, 64);
 
   proto = ip6h->nexthdr;
+  if (proto == NEXTHDR_FRAGMENT) {
+    old_skb = try_reassembly(old_skb);
+    if (!old_skb) {
+      goto done;
+    }
+    hdr = ipv6_hdr(old_skb);
+    proto = ip6h->nexthdr;
+  }
   
   switch(proto) {
     case NEXTHDR_TCP:
@@ -296,7 +321,7 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
       nat46_handle_icmp6(nat46, ip6h, old_skb);
       goto done;
     default:
-      nat46debug(3, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
+      nat46debug(0, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
       goto done;
   }
 
