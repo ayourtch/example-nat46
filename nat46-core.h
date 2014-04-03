@@ -6,6 +6,18 @@
 #define nat46debug(level, format, ...) debug(DBG_V6, level, format, __VA_ARGS__)
 // #define nat46debug(level, format, ...)
 
+#define nat46_reasm_debug(level, format, ...) debug(DBG_REASM, level, format, __VA_ARGS__)
+// #define nat46debug(level, format, ...)
+
+typedef struct {
+  struct  in6_addr        saddr;
+  struct  in6_addr        daddr;
+  __be32  identification;
+  struct sk_buff *skb;
+  __be16  frag_off;
+} reasm_item_t;
+
+#define NAT46_MAX_V6_FRAGS 128
 
 typedef struct {
   int debug;
@@ -14,6 +26,8 @@ typedef struct {
   struct in6_addr my_v6mask;
   struct in6_addr nat64pref;
   int nat64pref_len;
+  reasm_item_t frags[NAT46_MAX_V6_FRAGS];
+  int nfrags;
 } nat46_instance_t;
 
 void nat46_ipv6_input(struct sk_buff *old_skb);

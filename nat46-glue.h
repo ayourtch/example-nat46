@@ -7,6 +7,7 @@
 
 
 debug_type_t DBG_V6;
+debug_type_t DBG_REASM;
 
 void nat46_glue_periodic(void);
 void nat46_conf(char *cfg_str);

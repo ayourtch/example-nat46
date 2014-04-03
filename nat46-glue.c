@@ -18,6 +18,8 @@ int v6_idx;
 struct debug_type DBG_V6_S = { "ipv6", "IPV6", 0, 0 };
 debug_type_t DBG_V6 = &DBG_V6_S;
 
+struct debug_type DBG_REASM_S = { "reasm", "REASM", 0, 0 };
+debug_type_t DBG_REASM = &DBG_REASM_S;
 /*
  *
  * Linux look-alike functions.
@@ -196,6 +198,10 @@ unsigned char *skb_pull(struct sk_buff *skb, unsigned int len) {
         return unlikely(len > skb->len) ? NULL : __skb_pull(skb, len);
 }
 
+void skb_free(struct sk_buff *skb) {
+  dunlock(skb->dbuf);
+}
+
 void skb_reserve(struct sk_buff *skb, int len) {
         skb->data += len;
         skb->tail += len;
@@ -329,7 +335,7 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) 
     dprepend(skb->dbuf, nhead);
   }
   if (ntail > 0) {
-    dgrow(skb->dbuf, nhead);
+    dgrow(skb->dbuf, ntail);
   }
   skb->head = skb->dbuf->buf;
   skb->data = skb->head + data_offs + nhead;
@@ -341,6 +347,8 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) 
 struct sk_buff *skb_copy(const struct sk_buff *skb, gfp_t gfp_mask) {
   struct sk_buff *sknew = alloc_skb(skb->end - skb->data, gfp_mask);
   memcpy(sknew->data, skb->data, skb->end - skb->data);
+  sknew->len = skb->tail - skb->head;
+  sknew->tail = sknew->head + (skb->len);
   return sknew; 
 }
 
@@ -758,7 +766,8 @@ void v6_stack_periodic(v6_stack_t *v6) {
   uint64_t now = get_time_msec();
   int i;
   set_debug_level(DBG_V6, 100);
-  // set_debug_level(DBG_V6, 0);
+  set_debug_level(DBG_V6, 0);
+  set_debug_level(DBG_REASM, 100);
 
   // debug(DBG_V6, 100, "Periodic... now: %lld", now);
 
@@ -963,6 +972,7 @@ int ip_forward(struct sk_buff *skb) {
   memset(skb->dbuf->buf, 0, 4);
   skb->dbuf->buf[3] = 2;
   debug(DBG_V6, 10, "About to send the V4 packet on the wire:");
+  assert(skb->dbuf->dsize < 2000);
   debug_dump(DBG_V6, 20, skb->dbuf->buf, skb->dbuf->dsize);
   sock_send_data(v4_idx, skb->dbuf);
   return 1;
@@ -1037,7 +1047,6 @@ void handle_v6_packet(dbuf_t *d) {
     sk.len = sk.dbuf->dsize - sk.network_header;
     sk.tail = sk.end;
     if (need_to_process_v6(&sk, &v6_main_stack)) {
-      debug(DBG_V6, 10, "handle_v6_packet: need to process");
       nat46_ipv6_input(&sk);
     }
   }

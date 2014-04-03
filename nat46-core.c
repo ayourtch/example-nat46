@@ -38,6 +38,9 @@ nat46debug_dump(int level, void *addr, int len)
 
   while(--len >= 0) {
     if(i % 16 == 0) {
+      for(k=0; k<9; k++) {
+        buf0[k] = 0;
+      }
       for(k=0; k<8; k++) {
         buf0[7-k] = tohex[ 0xf & (i >> k) ];
       }
@@ -61,7 +64,7 @@ nat46debug_dump(int level, void *addr, int len)
     if(i % 16 == 0) {
       *pc1 = 0;
       *pc2 = 0;
-      nat46debug(level, "%s:   %s  %s", buf0, buf1, buf2);
+      nat46_reasm_debug(level, "%s:   %s  %s", buf0, buf1, buf2);
     }
 
   }
@@ -75,7 +78,7 @@ nat46debug_dump(int level, void *addr, int len)
     }
     *pc1 = 0;
     *pc2 = 0;
-    nat46debug(level, "%s:   %s  %s", buf0, buf1, buf2);
+    nat46_reasm_debug(level, "%s:   %s  %s", buf0, buf1, buf2);
   }
 }
 
@@ -261,10 +264,15 @@ int ip6_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *ip6h, stru
 
 __u32 xxx_my_v4addr;
 
-struct sk_buff *try_reassembly(struct sk_buff *old_skb) {
+struct sk_buff *try_reassembly(nat46_instance_t *nat46, struct sk_buff *old_skb) {
   struct ipv6hdr * hdr = ipv6_hdr(old_skb);
   struct frag_hdr *fh = (struct frag_hdr*)(hdr + 1);
-  nat46debug(1, "try_reassembly, frag_off value: %04x, nexthdr: %02x", fh->frag_off, fh->nexthdr);
+  struct sk_buff *new_frag = NULL;
+  struct sk_buff *ret_skb = NULL;
+  struct sk_buff *first_frag = NULL;
+  struct sk_buff *second_frag = NULL;
+  int i;
+  nat46_reasm_debug(1, "try_reassembly, frag_off value: %04x, nexthdr: %02x", fh->frag_off, fh->nexthdr);
   if(fh->frag_off == 0) {
     hdr->nexthdr = fh->nexthdr;
     hdr->payload_len = htons(ntohs(hdr->payload_len) - sizeof(struct frag_hdr));
@@ -272,10 +280,103 @@ struct sk_buff *try_reassembly(struct sk_buff *old_skb) {
     old_skb->len -= sizeof(struct frag_hdr);
     old_skb->end -= sizeof(struct frag_hdr);
     old_skb->tail -= sizeof(struct frag_hdr);
-    nat46debug(1, "reassembly successful, %d bytes shorter!", sizeof(struct frag_hdr));
-    nat46debug_dump(1, old_skb->data, old_skb->len);
+    nat46_reasm_debug(1, "reassembly successful, %d bytes shorter!", sizeof(struct frag_hdr));
+    ret_skb = old_skb;
+  } else {
+    nat46_reasm_debug(1, "reassembly can not be done because fragment offset is nonzero: %04x", fh->frag_off); 
+    
+    for(i=0; 
+            i < nat46->nfrags && 
+            nat46->frags[i].identification != fh->identification && 
+            (0 != ipv6_addr_cmp(&hdr->saddr, &nat46->frags[i].saddr)) &&
+            (0 != ipv6_addr_cmp(&hdr->daddr, &nat46->frags[i].daddr));
+        i++);
+    if(i < nat46->nfrags) {
+      /* Found a matching fragment in the queue, try to coalesce. */
+        nat46_reasm_debug(1, "Found a matching frag id %08x queued at index %d", fh->identification, i);
+        nat46_reasm_debug(1, "Queue frag_off: %04x, len: %04x; Current frag_off: %04x, len: %04x", ntohs(nat46->frags[i].frag_off), ntohs(ipv6_hdr(nat46->frags[i].skb)->payload_len), ntohs(fh->frag_off), ntohs(hdr->payload_len));
+
+        if ( 
+               (ntohs(nat46->frags[i].frag_off) & IP6_MF) && (0 == (ntohs(nat46->frags[i].frag_off) & IP6_OFFSET)) &&
+               (0 == (ntohs(fh->frag_off) & IP6_MF)) && (ntohs(fh->frag_off) & IP6_OFFSET) ) {
+          first_frag = nat46->frags[i].skb;
+          second_frag = old_skb;
+          nat46_reasm_debug(1, "First fragment is in the queue, second fragment just arrived", 0);
+        } else if (
+               (0 == (ntohs(nat46->frags[i].frag_off) & IP6_MF)) && (ntohs(nat46->frags[i].frag_off) & IP6_OFFSET) &&
+               (ntohs(fh->frag_off) & IP6_MF) && (0 == (ntohs(fh->frag_off) & IP6_OFFSET)) ) {
+          first_frag = old_skb;
+          second_frag = nat46->frags[i].skb;
+          nat46_reasm_debug(1, "Second fragment is in the queue, first fragment just arrived", 0);
+        } else {
+          first_frag = NULL;
+          second_frag = nat46->frags[i].skb;
+          nat46_reasm_debug(1, "Not sure which fragment is where, will just delete the frag from queue", 0);
+        }
+        if (first_frag) {
+          struct frag_hdr *fh1 = (struct frag_hdr*)(ipv6_hdr(first_frag) + 1);
+          struct frag_hdr *fh2 = (struct frag_hdr*)(ipv6_hdr(second_frag) + 1);
+
+          if (ntohs(ipv6_hdr(first_frag)->payload_len) - sizeof(struct frag_hdr) == (IP6_OFFSET & ntohs(fh2->frag_off))) {
+            nat46_reasm_debug(1, "pointers: head: %08x, data: %08x, tail: %08x, end: %08x", old_skb->head, old_skb->data, old_skb->tail, old_skb->end);
+            nat46_reasm_debug(1, "expanding by: %d\n", ntohs(ipv6_hdr(second_frag)->payload_len) - 2*sizeof(struct frag_hdr));
+            pskb_expand_head(first_frag, 0, ntohs(ipv6_hdr(second_frag)->payload_len) - 2*sizeof(struct frag_hdr), GFP_ATOMIC);
+            fh1 = (struct frag_hdr*)(ipv6_hdr(first_frag) + 1);
+            hdr = ipv6_hdr(first_frag);
+            hdr->nexthdr = fh1->nexthdr;
+            nat46_reasm_debug(1, "Reassembled next header: %d", hdr->nexthdr);
+            memmove(fh1, (fh1+1), first_frag->len - sizeof(struct frag_hdr));
+            first_frag->len -= sizeof(struct frag_hdr);
+            first_frag->tail -= sizeof(struct frag_hdr);
+
+            memcpy(first_frag->tail, (fh2+1), ntohs(ipv6_hdr(second_frag)->payload_len) - sizeof(struct frag_hdr));
+            first_frag->len += ntohs(ipv6_hdr(second_frag)->payload_len) - sizeof(struct frag_hdr);
+            first_frag->tail += ntohs(ipv6_hdr(second_frag)->payload_len) - sizeof(struct frag_hdr);
+
+            hdr->payload_len = htons(ntohs(hdr->payload_len) + ntohs(ipv6_hdr(second_frag)->payload_len) - 2*sizeof(struct frag_hdr));
+            nat46_reasm_debug(1, "reassembly successful from 2 frags, len: %d!", first_frag->len);
+            nat46_reasm_debug(1, "pointers: head: %08x, data: %08x, tail: %08x, end: %08x", old_skb->head, old_skb->data, old_skb->tail, old_skb->end);
+            // nat46debug_dump(-1, old_skb->head, old_skb->len);
+            
+          } else {
+            nat46_reasm_debug(1, "Can not reassemble two fragments, drop both", 0);
+            // nat46debug_dump(-1, first_frag->head, first_frag->len);
+          }
+        }
+        if (first_frag == nat46->frags[i].skb) {
+          pskb_expand_head(old_skb, 0, first_frag->len - old_skb->len, GFP_ATOMIC);
+          debug(0, 0, "Copying length: %d, resulting len: %d", first_frag->len, old_skb->len);
+          memcpy(old_skb->data, first_frag->data, first_frag->len);
+        }
+        skb_free(nat46->frags[i].skb); 
+        ret_skb = old_skb;
+           
+        if(nat46->nfrags > 1) {
+          memcpy(&nat46->frags[i], &nat46->frags[nat46->nfrags-1], sizeof(nat46->frags[i]));
+        }
+        if (nat46->nfrags > 0) { 
+          memset(&nat46->frags[nat46->nfrags-1], 0, sizeof(nat46->frags[nat46->nfrags-1]));
+          nat46->nfrags--;
+        }
+        nat46_reasm_debug(1, "Deleted fragment with index %d, new nfrags: %d", i, nat46->nfrags);
+     
+    } else {
+      if (nat46->nfrags < NAT46_MAX_V6_FRAGS) {
+        i = nat46->nfrags++;
+        new_frag = skb_copy(old_skb, GFP_ATOMIC);
+        memcpy(&nat46->frags[i].saddr, &hdr->saddr, 16);
+        memcpy(&nat46->frags[i].daddr, &hdr->daddr, 16);
+        nat46->frags[i].identification = fh->identification;
+        nat46->frags[i].frag_off = fh->frag_off;
+        nat46->frags[i].skb = new_frag;
+        nat46_reasm_debug(1, "Fragment id %08x queued at index %d", fh->identification, i);
+        ret_skb = old_skb;
+      }
+     
+       
+    }
   }
-  return old_skb;
+  return ret_skb;
 }
 
 void nat46_ipv6_input(struct sk_buff *old_skb) {
@@ -288,6 +389,7 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   char buf1[64], buf2[64], buf3[64], buf4[64];
   __u32 v4saddr, v4daddr;
   struct sk_buff * copy = 0;
+  struct sk_buff * sav_old_skb = old_skb;
   int err = -1;
   int truncSize = 0;
 
@@ -299,15 +401,16 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   }
   nat46debug(1, "nat46_ipv6_input next hdr: %d, len: %d", 
                 ip6h->nexthdr, old_skb->len);
-  debug_dump(DBG_V6, 1, old_skb->data, 64);
+  // debug_dump(DBG_V6, 1, old_skb->data, 64);
 
   proto = ip6h->nexthdr;
   if (proto == NEXTHDR_FRAGMENT) {
-    old_skb = try_reassembly(old_skb);
+    old_skb = try_reassembly(nat46, old_skb);
     if (!old_skb) {
       goto done;
     }
     hdr = ipv6_hdr(old_skb);
+    ip6h = ipv6_hdr(old_skb);
     proto = ip6h->nexthdr;
   }
   
@@ -346,11 +449,15 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   iph->saddr = v4saddr;
   iph->daddr = v4daddr;
   iph->protocol = hdr->nexthdr;
+  if(hdr->nexthdr == 44) {
+    debug(0,0, "Buggy next header! %08x %08x", hdr, ipv6_hdr(old_skb));
+  }
   *((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (0x00/*tos*/ & 0xff));
   iph->frag_off = htons(IP_DF);
 
   /* iph->tot_len = htons(copy->len); // almost good, but it may cause troubles with sizeof(IPv6 pkt)<64 (padding issue) */
   iph->tot_len = htons( ntohs(hdr->payload_len)+ 20 /*sizeof(ipv4hdr)*/ );
+  assert(ntohs(iph->tot_len) < 2000);
   iph->check = 0;
   iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
   copy->protocol = htons(ETH_P_IP);
@@ -564,7 +671,7 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
     goto done;
   }
   nat46debug(1, "nat46_ipv4_input packet", 0);
-  nat46debug_dump(1, old_skb->data, old_skb->len);
+  // nat46debug_dump(1, old_skb->data, old_skb->len);
 
   if (ntohs(hdr4->tot_len) > 1480) {
     // FIXME: need to send Packet Too Big here.
