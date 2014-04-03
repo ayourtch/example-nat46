@@ -71,6 +71,8 @@ int main(int argc, char *argv[]) {
   int timeout = 0;
   sock_handlers_t *hdl;
   int cli;
+  char tun_ifname[16];
+  char cmdstr[256];
 
   if (argc < 2) { 
     fprintf(stderr, "Usage: %s <dev>\n", argv[0]);
@@ -82,8 +84,15 @@ int main(int argc, char *argv[]) {
   pcapi = attach_pcap_with_filter(argv[1], "ip6");
   set_v6_idx(pcapi);
 
-  tuni = attach_tun_interface(NULL);
+  tuni = attach_tun_interface(tun_ifname);
   set_v4_idx(tuni);
+  debug(0,0, "Attached to tun interface: %s", tun_ifname);
+  snprintf(cmdstr, sizeof(cmdstr), "ifconfig %s 100.64.1.2 100.64.1.1; ifconfig %s mtu 1350", tun_ifname, tun_ifname);
+  debug(0,0, "Running: '%s'", cmdstr);
+  system(cmdstr);
+  snprintf(cmdstr, sizeof(cmdstr), "route delete default; route add default 100.64.1.1; sudo route add -net 144.254.221.0/24 100.64.1.1");
+  debug(0,0, "Running: '%s'", cmdstr);
+  system(cmdstr);
 /*
   cli = attach_cli(attach_stdin(0));
   hdl = cdata_get_handlers(cli);
