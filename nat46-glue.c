@@ -303,7 +303,7 @@ __wsum csum_partial(const void *p, int len, __wsum __sum) {
     sum += *buf++;
   }
   if (len % 2) {
-    sum += ( *((char *)buf) );
+    sum += ( *((u8 *)buf) );
   }
   return sum;
 }
