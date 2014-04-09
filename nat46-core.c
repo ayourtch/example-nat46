@@ -371,6 +371,8 @@ struct sk_buff *try_reassembly(nat46_instance_t *nat46, struct sk_buff *old_skb)
         nat46->frags[i].skb = new_frag;
         nat46_reasm_debug(1, "Fragment id %08x queued at index %d", fh->identification, i);
         ret_skb = old_skb;
+      } else {
+        assert("ran out of fragments!" == NULL);
       }
      
        

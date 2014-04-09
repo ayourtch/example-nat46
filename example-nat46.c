@@ -87,7 +87,8 @@ int main(int argc, char *argv[]) {
   tuni = attach_tun_interface(tun_ifname);
   set_v4_idx(tuni);
   debug(0,0, "Attached to tun interface: %s", tun_ifname);
-  snprintf(cmdstr, sizeof(cmdstr), "ifconfig %s 100.64.1.2 100.64.1.1; ifconfig %s mtu 1460", tun_ifname, tun_ifname);
+  // snprintf(cmdstr, sizeof(cmdstr), "ifconfig %s 100.64.1.2 100.64.1.1; ifconfig %s mtu 1460", tun_ifname, tun_ifname);
+  snprintf(cmdstr, sizeof(cmdstr), "ifconfig %s 100.64.1.2 100.64.1.1; ifconfig %s mtu 1200", tun_ifname, tun_ifname);
   debug(0,0, "Running: '%s'", cmdstr);
   system(cmdstr);
   snprintf(cmdstr, sizeof(cmdstr), "route delete default; route add default 100.64.1.1; sudo route add -net 144.254.221.0/24 100.64.1.1");

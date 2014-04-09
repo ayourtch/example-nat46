@@ -823,12 +823,16 @@ void v6_stack_periodic(v6_stack_t *v6) {
             memset(&nat46->my_v6mask, 0xff, 16);
             // nat46_conf("nat64pref 64:ff9b::/96");
             // Go6 ASR1k
-            nat46_conf("nat64pref 2001:67c:27e4:11::/96");
+            //nat46_conf("nat64pref 2001:67c:27e4:11::/96");
             // PAN
             // nat46_conf("nat64pref 2001:67c:27e4:64::/96");
             // Ecsdysis
             // nat46_conf("nat64pref 2001:67c:27e4:641::/96");
             //nat46_conf("nat64pref 64:ff9b::/96");
+            // AY hetzner
+            // nat46_conf("nat64pref 2001:470:73CD:CAFE::/96");
+            // cisco NOSTG
+            nat46_conf("nat64pref 2001:420:2ca:410b::/96");
             release_nat46_instance(nat46);
           }
         } else {
