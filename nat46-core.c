@@ -126,7 +126,7 @@ int try_parse_ipv6_prefix(struct in6_addr *pref, int *pref_len, char *arg) {
 }
 
 int try_parse_v4_addr(u32 *v4addr, char *arg) {
-  int err = (1 != in4_pton(arg, -1, (u8 *)&v4addr, '/', NULL));
+  int err = (1 != in4_pton(arg, -1, (u8 *)v4addr, '/', NULL));
   return err;
 }
 
