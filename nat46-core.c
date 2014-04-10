@@ -209,7 +209,14 @@ void ipv4_update_csum(struct sk_buff * skb, struct iphdr *iph) {
       break;
       }
     case IPPROTO_ICMP: {
-      /* do nothing here. ICMP does not use pseudoheaders for checksum calculation. */
+      struct icmphdr *icmph = (struct icmphdr *)(iph+1);
+      unsigned icmplen = 0;
+      icmplen = ntohs(iph->tot_len) - iphdrlen;
+      icmph->checksum = 0;
+      sum1 = csum_partial((char*)icmph, icmplen, 0);
+      sum2 = csum_fold(sum1);
+      icmph->checksum = sum2;
+      nat46debug(5, "ICMP checksum %04x", icmph->checksum);
       break;
       }
     default:
@@ -218,6 +225,23 @@ void ipv4_update_csum(struct sk_buff * skb, struct iphdr *iph) {
 }
 
 
+void nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
+  struct icmp6hdr *icmp6h = (struct icmp6hdr *)(ip6h + 1);
+  if(icmp6h->icmp6_type & 128) {
+    /* Informational ICMP */
+    switch(icmp6h->icmp6_type) {
+      case ICMPV6_ECHO_REQUEST:
+        icmp6h->icmp6_type = ICMP_ECHO;
+        break;
+      case ICMPV6_ECHO_REPLY:
+        icmp6h->icmp6_type = ICMP_ECHOREPLY;
+        break;
+    }
+  } else {
+    /* ICMPv6 errors */
+  }
+  ip6h->nexthdr = IPPROTO_ICMP;
+}
 
 
 void nat46_handle_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
@@ -388,6 +412,23 @@ struct sk_buff *try_reassembly(nat46_instance_t *nat46, struct sk_buff *old_skb)
   return ret_skb;
 }
 
+void nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, struct sk_buff *old_skb) {
+  struct icmphdr *icmph = (struct icmphdr *)(iph+1);
+  switch(icmph->type) {
+    case ICMP_ECHO:
+      icmph->type = ICMPV6_ECHO_REQUEST;
+      nat46debug(3, "ICMP echo request translated into IPv6", icmph->type); 
+      break;
+    case ICMP_ECHOREPLY:
+      icmph->type = ICMPV6_ECHO_REPLY;
+      nat46debug(3, "ICMP echo reply translated into IPv6", icmph->type); 
+      break;
+  }
+  iph->protocol = NEXTHDR_ICMP;
+}
+
+
+
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
@@ -428,10 +469,8 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
     case NEXTHDR_UDP:
       break;
     case NEXTHDR_ICMP:
-      skb_pull(old_skb, sizeof(struct ipv6hdr));
-      nat46debug(1, "nat46 ICMP6 packet", 0);
-      nat46_handle_icmp6(nat46, ip6h, old_skb);
-      goto done;
+      nat46_fixup_icmp6(nat46, ip6h, old_skb);
+      break;
     default:
       nat46debug(0, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
       goto done;
@@ -521,8 +560,17 @@ void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
 
       break;
       }
-    case IPPROTO_ICMP:
+    case NEXTHDR_ICMP: {
+      struct icmp6hdr *icmp6h = (struct icmp6hdr *)(ip6hdr + 1);
+      unsigned icmp6len = 0;
+
+      icmp6len = ntohs(ip6hdr->payload_len); /* ICMP header + payload */
+      icmp6h->icmp6_cksum = 0;
+      sum1 = csum_partial((char*)icmp6h, icmp6len, 0); /* calculate checksum for TCP hdr+payload */
+      sum2 = csum_ipv6_magic(&ip6hdr->saddr, &ip6hdr->daddr, icmp6len, ip6hdr->nexthdr, sum1); /* add pseudoheader */
+      icmp6h->icmp6_cksum = sum2;
       break;
+      }
     }
 }
 
@@ -690,7 +738,9 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   switch(hdr4->protocol) {
     case IPPROTO_TCP:
     case IPPROTO_UDP:
+      break;
     case IPPROTO_ICMP:
+      nat46_fixup_icmp(nat46, hdr4, old_skb);
       break;
     default:
       nat46debug(3, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP are supported.", hdr4->protocol);

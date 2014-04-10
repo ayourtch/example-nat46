@@ -409,6 +409,10 @@ struct iphdr *ip_hdr(struct sk_buff *skb) {
   return ((struct iphdr *) &skb->dbuf->buf[skb->network_header]);
 }
 
+struct icmphdr *icmp_hdr(const struct sk_buff *skb) {
+  return (struct icmphdr *)skb_transport_header(skb);
+}
+
 struct ipv6hdr *ipv6_hdr(struct sk_buff *skb) {
   return ((struct ipv6hdr *) &skb->dbuf->buf[skb->network_header]);
 }
@@ -834,9 +838,9 @@ void v6_stack_periodic(v6_stack_t *v6) {
             // nat46_conf("nat64pref 2001:67c:27e4:641::/96");
             //nat46_conf("nat64pref 64:ff9b::/96");
             // AY hetzner
-            // nat46_conf("nat64pref 2001:470:73CD:CAFE::/96");
+            nat46_conf("nat64pref 2001:470:73CD:CAFE::/96");
             // cisco NOSTG
-            nat46_conf("nat64pref 2001:420:2ca:410b::/96");
+            // nat46_conf("nat64pref 2001:420:2ca:410b::/96");
             // configure IPv4 address
             nat46_conf("v4addr 100.64.1.2");
             release_nat46_instance(nat46);
