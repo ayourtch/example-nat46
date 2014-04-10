@@ -25,6 +25,7 @@ typedef struct {
   struct in6_addr my_v6bits;
   struct in6_addr my_v6mask;
   struct in6_addr nat64pref;
+  u32		  my_v4addr;
   int nat64pref_len;
   reasm_item_t frags[NAT46_MAX_V6_FRAGS];
   int nfrags;

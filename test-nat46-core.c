@@ -30,6 +30,7 @@ int main(int argc, char *argv[]) {
   test_config(nat46, "debug 2\nv6bits 2001:db8::2");
   test_config(nat46, "v6bits 2001:db8::3 debug 3\n");
   test_config(nat46, "nat64pref 64:ff9b::/96 \n v6bits 2001:db8::4\n \ndebug 4\n");
+  test_config(nat46, "v4addr 100.64.1.2");
 
   return 0;
 }

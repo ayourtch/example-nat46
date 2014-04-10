@@ -29,6 +29,10 @@ long simple_strtol(const char *cp, char **endp, unsigned int base) {
   return strtol(cp, endp, base);
 }
 
+int in4_pton(const char *src, int srclen, u8 *dst, int delim, const char **end) {
+  return inet_aton(src, dst);
+}
+
 int in6_pton(const char *src, int srclen, u8 *dst, int delim, const char **end) {
    return inet_pton(AF_INET6, src, dst); 
 }
@@ -833,6 +837,8 @@ void v6_stack_periodic(v6_stack_t *v6) {
             // nat46_conf("nat64pref 2001:470:73CD:CAFE::/96");
             // cisco NOSTG
             nat46_conf("nat64pref 2001:420:2ca:410b::/96");
+            // configure IPv4 address
+            nat46_conf("v4addr 100.64.1.2");
             release_nat46_instance(nat46);
           }
         } else {

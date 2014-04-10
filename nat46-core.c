@@ -125,6 +125,11 @@ int try_parse_ipv6_prefix(struct in6_addr *pref, int *pref_len, char *arg) {
   return err;
 }
 
+int try_parse_v4_addr(u32 *v4addr, char *arg) {
+  int err = (1 != in4_pton(arg, -1, (u8 *)&v4addr, '/', NULL));
+  return err;
+}
+
 /* 
  * Parse the config commands in the buffer, 
  * destructive (puts zero between the args) 
@@ -143,6 +148,8 @@ int nat46_set_config(nat46_instance_t *nat46, char *buf, int count) {
       err = try_parse_ipv6_prefix(&nat46->my_v6bits, NULL, get_next_arg(&tail)); 
     } else if (0 == strcmp(arg_name, "v6mask")) {
       err = try_parse_ipv6_prefix(&nat46->my_v6mask, NULL, get_next_arg(&tail)); 
+    } else if (0 == strcmp(arg_name, "v4addr")) {
+      err = try_parse_v4_addr(&nat46->my_v4addr, get_next_arg(&tail));
     }
   }
   return err;
