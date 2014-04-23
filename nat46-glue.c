@@ -202,13 +202,22 @@ unsigned char *skb_pull(struct sk_buff *skb, unsigned int len) {
         return unlikely(len > skb->len) ? NULL : __skb_pull(skb, len);
 }
 
-void skb_free(struct sk_buff *skb) {
+void *skb_tail_pointer(struct sk_buff *skb) {
+  return skb->tail;
+}
+
+void kfree_skb(struct sk_buff *skb) {
   dunlock(skb->dbuf);
 }
 
 void skb_reserve(struct sk_buff *skb, int len) {
         skb->data += len;
         skb->tail += len;
+}
+
+void skb_put(struct sk_buff *skb, int len) {
+	skb->tail += len;
+	skb->len += len;
 }
 
 /*
@@ -827,8 +836,7 @@ void v6_stack_periodic(v6_stack_t *v6) {
             nat46_instance_t *nat46 = get_nat46_instance(NULL);
             /* The globally routable address is active. Setup NAT46 */
 
-            memcpy(&nat46->my_v6bits, &v6->my_v6addr[i], 16);
-            memset(&nat46->my_v6mask, 0xff, 16);
+            memcpy(&nat46->local_rule.v6_pref, &v6->my_v6addr[i], 16);
             // nat46_conf("nat64pref 64:ff9b::/96");
             // Go6 ASR1k
             //nat46_conf("nat64pref 2001:67c:27e4:11::/96");
@@ -1003,6 +1011,17 @@ int ip6_forward(struct sk_buff *skb) {
   debug_dump(DBG_V6, 20, skb->dbuf->buf, skb->dbuf->dsize);
   sock_send_data(v6_idx, skb->dbuf);
   return 1;
+}
+
+void netif_rx(struct sk_buff *skb) {
+  debug(DBG_GLOBAL, 0, "netif_rx Packet: %02x", skb->data[0] & 0xF);
+  if (0x45 == skb->data[0]) {
+    /* IPv4 packet. */
+    ip_forward(skb);
+  } else {
+    /* not IPv4 packet. We call this only for v4 and v6, so this is IPv6 */
+    ip6_forward(skb);
+  }
 }
 
 void set_v4_idx(int idx) {

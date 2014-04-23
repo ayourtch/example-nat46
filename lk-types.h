@@ -200,28 +200,15 @@ struct sk_buff {
   __u8 ipvs_property:1;
   __be16 protocol;
   void (* destructor) (struct sk_buff *skb);
-#ifdef CONFIG_NETFILTER
   struct nf_conntrack * nfct;
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
   struct sk_buff * nfct_reasm;
-#endif
-#ifdef CONFIG_BRIDGE_NETFILTER
   struct nf_bridge_info * nf_bridge;
-#endif
   __u32 nfmark;
-#endif
-#ifdef CONFIG_NET_SCHED
   __u16 tc_index;
-#ifdef CONFIG_NET_CLS_ACT
   __u16 tc_verd;
-#endif
-#endif
-#ifdef CONFIG_NET_DMA
-  dma_cookie_t dma_cookie;
-#endif
-#ifdef CONFIG_NETWORK_SECMARK
   __u32 secmark;
-#endif
+  __u16 nf_trace;
+  __u16 peeked;
   dbuf_t *dbuf; /* reference to dbuf inner type */
   union {
     __u32           mark;

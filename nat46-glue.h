@@ -2,6 +2,9 @@
 #ifndef __V6_GLUE_H__
 #define __V6_GLUE_H__
 
+#include <netinet/in.h>
+#include <netinet/ip6.h>
+
 #include "lk-types.h"
 #include "nat46-core.h"
 

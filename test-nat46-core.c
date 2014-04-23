@@ -26,11 +26,11 @@ int main(int argc, char *argv[]) {
   debug_show_timestamp(0);
 
   nat46 = get_nat46_instance(NULL);
-  test_config(nat46, "debug 1 v6bits 2001:db8::1");
-  test_config(nat46, "debug 2\nv6bits 2001:db8::2");
-  test_config(nat46, "v6bits 2001:db8::3 debug 3\n");
-  test_config(nat46, "nat64pref 64:ff9b::/96 \n v6bits 2001:db8::4\n \ndebug 4\n");
-  test_config(nat46, "v4addr 100.64.1.3");
+  test_config(nat46, "debug 1 local.v6 2001:db8::1/64");
+  test_config(nat46, "debug 2\nlocal.v6 2001:db8::2");
+  test_config(nat46, "remote.v6 2001:db8::3/64 debug 3\n");
+  test_config(nat46, "remote.style RFC6052 remote.v6 64:ff9b::/96 \n local.psid-offset 4\n \ndebug 4\n");
+  test_config(nat46, "local.ea-len 2");
 
   return 0;
 }
