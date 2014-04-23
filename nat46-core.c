@@ -283,6 +283,92 @@ void ipv4_update_csum(struct sk_buff * skb, struct iphdr *iph) {
   }
 }
 
+
+static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+  /*
+   * Destination Unreachable (Type 1)  Set the Type to 3, and adjust
+   * the ICMP checksum both to take the type/code change into
+   * account and to exclude the ICMPv6 pseudo-header.
+   *
+   * Translate the Code as follows:
+   *
+   * Code 0 (No route to destination):  Set the Code to 1 (Host
+   *            unreachable).
+   *
+   * Code 1 (Communication with destination administratively
+   *        prohibited):  Set the Code to 10 (Communication with
+   *        destination host administratively prohibited).
+   *
+   * Code 2 (Beyond scope of source address):  Set the Code to 1
+   *        (Host unreachable).  Note that this error is very unlikely
+   *        since an IPv4-translatable source address is typically
+   *        considered to have global scope.
+   *
+   * Code 3 (Address unreachable):  Set the Code to 1 (Host
+   *        unreachable).
+   *
+   * Code 4 (Port unreachable):  Set the Code to 3 (Port
+   *        unreachable).
+   *
+   * Other Code values:  Silently drop.
+   */
+  return 0;
+}
+
+static uint16_t nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+  /*
+   * Packet Too Big (Type 2):  Translate to an ICMPv4 Destination
+   * Unreachable (Type 3) with Code 4, and adjust the ICMPv4
+   * checksum both to take the type change into account and to
+   * exclude the ICMPv6 pseudo-header.  The MTU field MUST be
+   * adjusted for the difference between the IPv4 and IPv6 header
+   * sizes, taking into account whether or not the packet in error
+   * includes a Fragment Header, i.e., minimum(advertised MTU-20,
+   * MTU_of_IPv4_nexthop, (MTU_of_IPv6_nexthop)-20).
+   *
+   * See also the requirements in Section 6.
+   */
+  return 0;
+}
+
+static uint16_t nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+  /*
+   *         Parameter Problem (Type 4):  Translate the Type and Code as
+   *         follows, and adjust the ICMPv4 checksum both to take the type/
+   *         code change into account and to exclude the ICMPv6 pseudo-
+   *         header.
+   *
+   *         Translate the Code as follows:
+   *
+   *         Code 0 (Erroneous header field encountered):  Set to Type 12,
+   *            Code 0, and update the pointer as defined in Figure 6.  (If
+   *            the Original IPv6 Pointer Value is not listed or the
+   *            Translated IPv4 Pointer Value is listed as "n/a", silently
+   *            drop the packet.)
+   *
+   *         Code 1 (Unrecognized Next Header type encountered):  Translate
+   *            this to an ICMPv4 protocol unreachable (Type 3, Code 2).
+   *
+   *         Code 2 (Unrecognized IPv6 option encountered):  Silently drop.
+   *
+   *      Unknown error messages:  Silently drop.
+   *
+   *     +--------------------------------+--------------------------------+
+   *     |   Original IPv6 Pointer Value  | Translated IPv4 Pointer Value  |
+   *     +--------------------------------+--------------------------------+
+   *     |  0  | Version/Traffic Class    |  0  | Version/IHL, Type Of Ser |
+   *     |  1  | Traffic Class/Flow Label |  1  | Type Of Service          |
+   *     | 2,3 | Flow Label               | n/a |                          |
+   *     | 4,5 | Payload Length           |  2  | Total Length             |
+   *     |  6  | Next Header              |  9  | Protocol                 |
+   *     |  7  | Hop Limit                |  8  | Time to Live             |
+   *     | 8-23| Source Address           | 12  | Source Address           |
+   *     |24-39| Destination Address      | 16  | Destination Address      |
+   *     +--------------------------------+--------------------------------+
+   */
+  return 0;
+}
+
 /* Fixup ICMP6->ICMP before IP header translation, according to http://tools.ietf.org/html/rfc6145 */
 
 static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
@@ -309,47 +395,10 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
     /* ICMPv6 errors */
     switch(icmp6h->icmp6_type) {
       case ICMPV6_DEST_UNREACH:
-        /*
-         * Destination Unreachable (Type 1)  Set the Type to 3, and adjust
-         * the ICMP checksum both to take the type/code change into
-         * account and to exclude the ICMPv6 pseudo-header.
-         *
-         * Translate the Code as follows:
-         *
-         * Code 0 (No route to destination):  Set the Code to 1 (Host
-         *            unreachable).
-         *
-         * Code 1 (Communication with destination administratively
-         *        prohibited):  Set the Code to 10 (Communication with
-         *        destination host administratively prohibited).
-         *
-         * Code 2 (Beyond scope of source address):  Set the Code to 1
-         *        (Host unreachable).  Note that this error is very unlikely
-         *        since an IPv4-translatable source address is typically
-         *        considered to have global scope.
-         *
-         * Code 3 (Address unreachable):  Set the Code to 1 (Host
-         *        unreachable).
-         *
-         * Code 4 (Port unreachable):  Set the Code to 3 (Port
-         *        unreachable).
-         *
-         * Other Code values:  Silently drop.
-         */
+        ret = nat46_fixup_icmp6_dest_unreach(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_PKT_TOOBIG:
-        /*
-         * Packet Too Big (Type 2):  Translate to an ICMPv4 Destination
-         * Unreachable (Type 3) with Code 4, and adjust the ICMPv4
-         * checksum both to take the type change into account and to
-         * exclude the ICMPv6 pseudo-header.  The MTU field MUST be
-         * adjusted for the difference between the IPv4 and IPv6 header
-         * sizes, taking into account whether or not the packet in error
-         * includes a Fragment Header, i.e., minimum(advertised MTU-20,
-         * MTU_of_IPv4_nexthop, (MTU_of_IPv6_nexthop)-20).
-         *
-         * See also the requirements in Section 6.
-         */
+        ret = nat46_fixup_icmp6_pkt_toobig(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_TIME_EXCEED:
         /*
@@ -357,42 +406,10 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
          * checksum both to take the type change into account and to
          * exclude the ICMPv6 pseudo-header.  The Code is unchanged.
          */
+	icmp6h->icmp6_type = 11;
         break;
       case ICMPV6_PARAMPROB:
-        /*
-         *         Parameter Problem (Type 4):  Translate the Type and Code as
-         *         follows, and adjust the ICMPv4 checksum both to take the type/
-         *         code change into account and to exclude the ICMPv6 pseudo-
-         *         header.
-         *
-         *         Translate the Code as follows:
-         *
-         *         Code 0 (Erroneous header field encountered):  Set to Type 12,
-         *            Code 0, and update the pointer as defined in Figure 6.  (If
-         *            the Original IPv6 Pointer Value is not listed or the
-         *            Translated IPv4 Pointer Value is listed as "n/a", silently
-         *            drop the packet.)
-         *
-         *         Code 1 (Unrecognized Next Header type encountered):  Translate
-         *            this to an ICMPv4 protocol unreachable (Type 3, Code 2).
-         *
-         *         Code 2 (Unrecognized IPv6 option encountered):  Silently drop.
-         *
-         *      Unknown error messages:  Silently drop.
-         *
-         *     +--------------------------------+--------------------------------+
-         *     |   Original IPv6 Pointer Value  | Translated IPv4 Pointer Value  |
-         *     +--------------------------------+--------------------------------+
-         *     |  0  | Version/Traffic Class    |  0  | Version/IHL, Type Of Ser |
-         *     |  1  | Traffic Class/Flow Label |  1  | Type Of Service          |
-         *     | 2,3 | Flow Label               | n/a |                          |
-         *     | 4,5 | Payload Length           |  2  | Total Length             |
-         *     |  6  | Next Header              |  9  | Protocol                 |
-         *     |  7  | Hop Limit                |  8  | Time to Live             |
-         *     | 8-23| Source Address           | 12  | Source Address           |
-         *     |24-39| Destination Address      | 16  | Destination Address      |
-         *     +--------------------------------+--------------------------------+
-         */
+        ret = nat46_fixup_icmp6_paramprob(nat46, ip6h, icmp6h, old_skb);
         break;
       default:
         ip6h->nexthdr = 0;
@@ -971,6 +988,182 @@ int xlate_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv
   return ret;
 }
 
+u8 *icmp_parameter_ptr(struct icmphdr *icmph) {
+  u8 *icmp_pptr = ((u8 *)(icmph))+4;
+  return icmp_pptr;
+}
+
+static uint16_t nat46_fixup_icmp_parameterprob(nat46_instance_t *nat46, struct iphdr *iph, struct icmphdr *icmph, struct sk_buff *old_skb) {
+  /*
+   * Set the Type to 4, and adjust the
+   * ICMP checksum both to take the type/code change into account
+   * and to include the ICMPv6 pseudo-header.
+   *
+   * Translate the Code as follows:
+   *
+   * Code 0 (Pointer indicates the error):  Set the Code to 0
+   * (Erroneous header field encountered) and update the
+   * pointer as defined in Figure 3.  (If the Original IPv4
+   * Pointer Value is not listed or the Translated IPv6
+   * Pointer Value is listed as "n/a", silently drop the
+   * packet.)
+   *
+   * Code 1 (Missing a required option):  Silently drop.
+   *
+   * Code 2 (Bad length):  Set the Code to 0 (Erroneous header
+   * field encountered) and update the pointer as defined in
+   * Figure 3.  (If the Original IPv4 Pointer Value is not
+   * listed or the Translated IPv6 Pointer Value is listed as
+   * "n/a", silently drop the packet.)
+   *
+   *            Other Code values:  Silently drop.
+   *
+   *     +--------------------------------+--------------------------------+
+   *     |   Original IPv4 Pointer Value  | Translated IPv6 Pointer Value  |
+   *     +--------------------------------+--------------------------------+
+   *     |  0  | Version/IHL              |  0  | Version/Traffic Class    |
+   *     |  1  | Type Of Service          |  1  | Traffic Class/Flow Label |
+   *     | 2,3 | Total Length             |  4  | Payload Length           |
+   *     | 4,5 | Identification           | n/a |                          |
+   *     |  6  | Flags/Fragment Offset    | n/a |                          |
+   *     |  7  | Fragment Offset          | n/a |                          |
+   *     |  8  | Time to Live             |  7  | Hop Limit                |
+   *     |  9  | Protocol                 |  6  | Next Header              |
+   *     |10,11| Header Checksum          | n/a |                          |
+   *     |12-15| Source Address           |  8  | Source Address           |
+   *     |16-19| Destination Address      | 24  | Destination Address      |
+   *     +--------------------------------+--------------------------------+
+   */
+  static int ptr4_6[] = { 0, 1, 4, 4, -1, -1, -1, -1, 7, 6, -1, -1, 8, 8, 8, 8, 24, 24, 24, 24, -1 };
+  u8 *icmp_pptr = icmp_parameter_ptr(icmph);
+  switch (icmph->code) {
+    case 0:
+    case 2:
+      if (*icmp_pptr < (sizeof(ptr4_6)/sizeof(ptr4_6[0]))) {
+        icmph->code = 0;
+        /* *icmp6_pptr = ptr4_6[*icmp_pptr]; */
+      } else {
+        iph->protocol = NEXTHDR_NONE;
+      }
+      break;
+    default:
+      iph->protocol = NEXTHDR_NONE;
+  }
+  return 0;
+}
+
+static uint16_t nat46_fixup_icmp_dest_unreach(nat46_instance_t *nat46, struct iphdr *iph, struct icmphdr *icmph, struct sk_buff *old_skb) {
+  /*
+   *    Translate the Code as
+   *    described below, set the Type to 1, and adjust the ICMP
+   *    checksum both to take the type/code change into account and
+   *    to include the ICMPv6 pseudo-header.
+   *
+   *    Translate the Code as follows:
+   *
+   *    Code 0, 1 (Net Unreachable, Host Unreachable):  Set the Code
+   *       to 0 (No route to destination).
+   *
+   *    Code 2 (Protocol Unreachable):  Translate to an ICMPv6
+   *       Parameter Problem (Type 4, Code 1) and make the Pointer
+   *       point to the IPv6 Next Header field.
+   *
+   *    Code 3 (Port Unreachable):  Set the Code to 4 (Port
+   *       unreachable).
+   *
+   *    Code 4 (Fragmentation Needed and DF was Set):  Translate to
+   *       an ICMPv6 Packet Too Big message (Type 2) with Code set
+   *       to 0.  The MTU field MUST be adjusted for the difference
+   *       between the IPv4 and IPv6 header sizes, i.e.,
+   *       minimum(advertised MTU+20, MTU_of_IPv6_nexthop,
+   *       (MTU_of_IPv4_nexthop)+20).  Note that if the IPv4 router
+   *       set the MTU field to zero, i.e., the router does not
+   *       implement [RFC1191], then the translator MUST use the
+   *       plateau values specified in [RFC1191] to determine a
+   *       likely path MTU and include that path MTU in the ICMPv6
+   *       packet.  (Use the greatest plateau value that is less
+   *       than the returned Total Length field.)
+   *
+   *       See also the requirements in Section 6.
+   *
+   *    Code 5 (Source Route Failed):  Set the Code to 0 (No route
+   *       to destination).  Note that this error is unlikely since
+   *       source routes are not translated.
+   *
+   *    Code 6, 7, 8:  Set the Code to 0 (No route to destination).
+   *
+   *    Code 9, 10 (Communication with Destination Host
+   *       Administratively Prohibited):  Set the Code to 1
+   *       (Communication with destination administratively
+   *       prohibited).
+   *
+   *    Code 11, 12:  Set the Code to 0 (No route to destination).
+   *
+   *    Code 13 (Communication Administratively Prohibited):  Set
+   *       the Code to 1 (Communication with destination
+   *       administratively prohibited).
+   *
+   *    Code 14 (Host Precedence Violation):  Silently drop.
+   *
+   *    Code 15 (Precedence cutoff in effect):  Set the Code to 1
+   *       (Communication with destination administratively
+   *       prohibited).
+   *
+   *    Other Code values:  Silently drop.
+   *
+   */
+  switch (icmph->code) {
+    case 0:
+    case 1:
+      icmph->code = 0;
+      break;
+    case 2:
+      /* *(icmp_parameter_ptr(icmph)) = 6; */
+      icmph->type = 4;
+      icmph->code = 1;
+      break;
+    case 3:
+      icmph->code = 4;
+      break;
+    case 4:
+      /*
+       * On adjusting the signaled MTU within packet:
+       *
+       * IPv4 has 20 bytes smaller header size, so, standard says
+       * we can advertise a higher MTU here. However, then we will
+       * need to ensure it does not overshoot our egress link MTU,
+       * which implies knowing the egress interface, which is
+       * not trivial in the current model.
+       * So, for now just leave the MTU in the packet as is.
+       */
+      icmph->type = 2;
+      icmph->code = 0;
+      break;
+    case 5:
+    case 6:
+    case 7:
+    case 8:
+      icmph->code = 0;
+      break;
+    case 9:
+    case 10:
+      icmph->code = 1;
+      break;
+    case 11:
+    case 12:
+      icmph->code = 0;
+      break;
+    case 13:
+    case 15:
+      icmph->code = 1;
+      break;
+    default:
+      iph->protocol = NEXTHDR_NONE;
+  }
+  return 0;
+}
+
+
 /* Fixup ICMP->ICMP6 before IP header translation, according to http://tools.ietf.org/html/rfc6145 */
 
 static uint16_t nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, struct sk_buff *old_skb) {
@@ -996,112 +1189,13 @@ static uint16_t nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, str
        * ICMP checksum both to take the type change into account and
        * to include the ICMPv6 pseudo-header.  The Code is unchanged.
        */
+      icmph->type = 3;
       break;
     case ICMP_PARAMETERPROB:
-      /*
-       * Set the Type to 4, and adjust the
-       * ICMP checksum both to take the type/code change into account
-       * and to include the ICMPv6 pseudo-header.
-       *
-       * Translate the Code as follows:
-       *
-       * Code 0 (Pointer indicates the error):  Set the Code to 0
-       * (Erroneous header field encountered) and update the
-       * pointer as defined in Figure 3.  (If the Original IPv4
-       * Pointer Value is not listed or the Translated IPv6
-       * Pointer Value is listed as "n/a", silently drop the
-       * packet.)
-       *
-       * Code 1 (Missing a required option):  Silently drop.
-       *
-       * Code 2 (Bad length):  Set the Code to 0 (Erroneous header
-       * field encountered) and update the pointer as defined in
-       * Figure 3.  (If the Original IPv4 Pointer Value is not
-       * listed or the Translated IPv6 Pointer Value is listed as
-       * "n/a", silently drop the packet.)
-       *
-       *            Other Code values:  Silently drop.
-       *
-       *     +--------------------------------+--------------------------------+
-       *     |   Original IPv4 Pointer Value  | Translated IPv6 Pointer Value  |
-       *     +--------------------------------+--------------------------------+
-       *     |  0  | Version/IHL              |  0  | Version/Traffic Class    |
-       *     |  1  | Type Of Service          |  1  | Traffic Class/Flow Label |
-       *     | 2,3 | Total Length             |  4  | Payload Length           |
-       *     | 4,5 | Identification           | n/a |                          |
-       *     |  6  | Flags/Fragment Offset    | n/a |                          |
-       *     |  7  | Fragment Offset          | n/a |                          |
-       *     |  8  | Time to Live             |  7  | Hop Limit                |
-       *     |  9  | Protocol                 |  6  | Next Header              |
-       *     |10,11| Header Checksum          | n/a |                          |
-       *     |12-15| Source Address           |  8  | Source Address           |
-       *     |16-19| Destination Address      | 24  | Destination Address      |
-       *     +--------------------------------+--------------------------------+
-       */
-      {
-        static int ptr4_6[] = { 0, 1, 4, 4, -1, -1, -1, -1, 7, 6, -1, -1, 8, 8, 8, 8, 24, 24, 24, 24, -1 };
-      }
+      ret = nat46_fixup_icmp_parameterprob(nat46, iph, icmph, old_skb);
       break;
     case ICMP_DEST_UNREACH:
-      /*
-       *    Translate the Code as
-       *    described below, set the Type to 1, and adjust the ICMP
-       *    checksum both to take the type/code change into account and
-       *    to include the ICMPv6 pseudo-header.
-       *
-       *    Translate the Code as follows:
-       *
-       *    Code 0, 1 (Net Unreachable, Host Unreachable):  Set the Code
-       *       to 0 (No route to destination).
-       *
-       *    Code 2 (Protocol Unreachable):  Translate to an ICMPv6
-       *       Parameter Problem (Type 4, Code 1) and make the Pointer
-       *       point to the IPv6 Next Header field.
-       *
-       *    Code 3 (Port Unreachable):  Set the Code to 4 (Port
-       *       unreachable).
-       *
-       *    Code 4 (Fragmentation Needed and DF was Set):  Translate to
-       *       an ICMPv6 Packet Too Big message (Type 2) with Code set
-       *       to 0.  The MTU field MUST be adjusted for the difference
-       *       between the IPv4 and IPv6 header sizes, i.e.,
-       *       minimum(advertised MTU+20, MTU_of_IPv6_nexthop,
-       *       (MTU_of_IPv4_nexthop)+20).  Note that if the IPv4 router
-       *       set the MTU field to zero, i.e., the router does not
-       *       implement [RFC1191], then the translator MUST use the
-       *       plateau values specified in [RFC1191] to determine a
-       *       likely path MTU and include that path MTU in the ICMPv6
-       *       packet.  (Use the greatest plateau value that is less
-       *       than the returned Total Length field.)
-       *
-       *       See also the requirements in Section 6.
-       *
-       *    Code 5 (Source Route Failed):  Set the Code to 0 (No route
-       *       to destination).  Note that this error is unlikely since
-       *       source routes are not translated.
-       *
-       *    Code 6, 7, 8:  Set the Code to 0 (No route to destination).
-       *
-       *    Code 9, 10 (Communication with Destination Host
-       *       Administratively Prohibited):  Set the Code to 1
-       *       (Communication with destination administratively
-       *       prohibited).
-       *
-       *    Code 11, 12:  Set the Code to 0 (No route to destination).
-       *
-       *    Code 13 (Communication Administratively Prohibited):  Set
-       *       the Code to 1 (Communication with destination
-       *       administratively prohibited).
-       *
-       *    Code 14 (Host Precedence Violation):  Silently drop.
-       *
-       *    Code 15 (Precedence cutoff in effect):  Set the Code to 1
-       *       (Communication with destination administratively
-       *       prohibited).
-       *
-       *    Other Code values:  Silently drop.
-       *
-       */
+      ret = nat46_fixup_icmp_dest_unreach(nat46, iph, icmph, old_skb);
       break;
     default:
       /* Silently drop. */
