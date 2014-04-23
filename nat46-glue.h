@@ -4,10 +4,12 @@
 
 #include <netinet/in.h>
 #include <netinet/ip6.h>
+#include <stdio.h>
 
 #include "lk-types.h"
 #include "nat46-core.h"
 
+#define printk printf
 
 debug_type_t DBG_V6;
 debug_type_t DBG_REASM;

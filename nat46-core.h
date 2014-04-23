@@ -4,12 +4,12 @@
 #include "nat46-glue.h"
 
 // #define nat46debug(level, format, ...) debug(DBG_V6, level, format, __VA_ARGS__)
-#define nat46debug(level, format, ...)
-// #define nat46debug(level, format, ...) do { if(nat46->debug >= level) { printk(format "\n", ##__VA_ARGS__); } } while (0)
+// #define nat46debug(level, format, ...)
+#define nat46debug(level, format, ...) do { if(nat46->debug >= level) { printk(format "\n", ##__VA_ARGS__); } } while (0)
 
 // #define nat46_reasm_debug(level, format, ...) debug(DBG_REASM, level, format, __VA_ARGS__)
-#define nat46_reasm_debug(level, format, ...)
-//#define nat46_reasm_debug(level, format, ...) do { if(nat46->debug >= level) { printk(format "\n", ##__VA_ARGS__); } } while (0)
+// #define nat46_reasm_debug(level, format, ...)
+#define nat46_reasm_debug(level, format, ...) do { if(nat46->debug >= level) { printk(format "\n", ##__VA_ARGS__); } } while (0)
 
 typedef struct {
   struct  in6_addr        saddr;

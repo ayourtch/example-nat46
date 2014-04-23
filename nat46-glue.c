@@ -778,6 +778,12 @@ void ndisc_recv_ns(struct sk_buff *skb, v6_stack_t *v6) {
 }
 
 uint32_t rs_interval = 1000;
+char *nat46_config = NULL;
+
+void set_nat46_config(char *cfg) {
+  debug(DBG_V6, 0, "Setting config to: '%s'", cfg);
+  nat46_config = cfg;
+}
 
 void v6_stack_periodic(v6_stack_t *v6) {
   uint64_t now = get_time_msec();
@@ -836,21 +842,22 @@ void v6_stack_periodic(v6_stack_t *v6) {
             nat46_instance_t *nat46 = get_nat46_instance(NULL);
             /* The globally routable address is active. Setup NAT46 */
 
+            nat46_conf("local.v6 ::/128 remote.style RFC6052 local.style MAP0 local.v4 100.64.1.2/32");
             memcpy(&nat46->local_rule.v6_pref, &v6->my_v6addr[i], 16);
             // nat46_conf("nat64pref 64:ff9b::/96");
             // Go6 ASR1k
-            //nat46_conf("nat64pref 2001:67c:27e4:11::/96");
+            nat46_conf("remote.v6 2001:67c:27e4:11::/96");
             // PAN
             // nat46_conf("nat64pref 2001:67c:27e4:64::/96");
             // Ecsdysis
             // nat46_conf("nat64pref 2001:67c:27e4:641::/96");
             //nat46_conf("nat64pref 64:ff9b::/96");
             // AY hetzner
-            nat46_conf("nat64pref 2001:470:73CD:CAFE::/96");
+            // nat46_conf("nat64pref 2001:470:73CD:CAFE::/96");
             // cisco NOSTG
             // nat46_conf("nat64pref 2001:420:2ca:410b::/96");
             // configure IPv4 address
-            nat46_conf("v4addr 100.64.1.2");
+            nat46_conf(nat46_config);
             release_nat46_instance(nat46);
           }
         } else {
@@ -1014,7 +1021,6 @@ int ip6_forward(struct sk_buff *skb) {
 }
 
 void netif_rx(struct sk_buff *skb) {
-  debug(DBG_GLOBAL, 0, "netif_rx Packet: %02x", skb->data[0] & 0xF);
   if (0x45 == skb->data[0]) {
     /* IPv4 packet. */
     ip_forward(skb);
@@ -1043,7 +1049,7 @@ void nat46_conf(char *cfg_str) {
 
   debug(DBG_GLOBAL, 0, "Configuring the nat46 instance from string: %s", buf);
   nat46_set_config(nat46, buf, strlen(buf));
-  debug_dump(DBG_GLOBAL, 0, nat46, sizeof(*nat46));
+  debug_dump(DBG_GLOBAL, 10, nat46, sizeof(*nat46));
   free(buf);
 }
 

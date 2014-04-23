@@ -74,8 +74,8 @@ int main(int argc, char *argv[]) {
   char tun_ifname[16];
   char cmdstr[256];
 
-  if (argc < 2) { 
-    fprintf(stderr, "Usage: %s <dev>\n", argv[0]);
+  if (argc < 2) {
+    fprintf(stderr, "Usage: %s <dev> ['config string']\n", argv[0]);
     exit(1);
   }
 
@@ -83,6 +83,10 @@ int main(int argc, char *argv[]) {
 
   pcapi = attach_pcap_with_filter(argv[1], "ip6");
   set_v6_idx(pcapi);
+
+  if (argc > 2) {
+    set_nat46_config(argv[2]);
+  }
 
   tuni = attach_tun_interface(tun_ifname);
   set_v4_idx(tuni);
