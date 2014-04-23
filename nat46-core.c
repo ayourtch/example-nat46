@@ -840,6 +840,8 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
 
   u8 *prfc4884len6 = icmp6_rfc4884len_ptr(icmp6h);
   /* FIXME: http://tools.ietf.org/html/rfc4884 */
+  uint16_t sport, dport;
+  int len;
 
   icmp6h->icmp6_type = 3;
 
@@ -858,7 +860,8 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
     default:
       ip6h->nexthdr = NEXTHDR_NONE;
   }
-  return 0;
+  len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h), &sport, &dport);
+  return sport;
 }
 
 static uint16_t nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
