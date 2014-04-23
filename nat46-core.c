@@ -283,6 +283,26 @@ void ipv4_update_csum(struct sk_buff * skb, struct iphdr *iph) {
   }
 }
 
+u8 *icmp_rfc4884len_ptr(struct icmphdr *icmph) {
+  u8 *prfc4884len = ((u8 *)(icmph))+5;
+  return prfc4884len;
+}
+
+u8 *icmp6_rfc4884len_ptr(struct icmp6hdr *icmp6h) {
+  u8 *prfc4884len = ((u8 *)(icmp6h))+4;
+  return prfc4884len;
+}
+
+u8 *icmp_parameter_ptr(struct icmphdr *icmph) {
+  u8 *icmp_pptr = ((u8 *)(icmph))+4;
+  return icmp_pptr;
+}
+
+u32 *icmp6_parameter_ptr(struct icmp6hdr *icmp6h) {
+  u32 *icmp6_pptr = ((u32 *)(icmp6h))+1;
+  return icmp6_pptr;
+}
+
 
 static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
   /*
@@ -312,6 +332,27 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
    *
    * Other Code values:  Silently drop.
    */
+
+  u8 *prfc4884len6 = icmp6_rfc4884len_ptr(icmp6h);
+  /* FIXME: http://tools.ietf.org/html/rfc4884 */
+
+  icmp6h->icmp6_type = 3;
+
+  switch(icmp6h->icmp6_code) {
+    case 0:
+    case 2:
+    case 3:
+      icmp6h->icmp6_code = 1;
+      break;
+    case 1:
+      icmp6h->icmp6_code = 10;
+      break;
+    case 4:
+      icmp6h->icmp6_code = 3;
+      break;
+    default:
+      ip6h->nexthdr = NEXTHDR_NONE;
+  }
   return 0;
 }
 
@@ -327,7 +368,43 @@ static uint16_t nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv
    * MTU_of_IPv4_nexthop, (MTU_of_IPv6_nexthop)-20).
    *
    * See also the requirements in Section 6.
+   *
+   * Section 6 says this for v6->v4 side translation:
+   *
+   * 2.  In the IPv6-to-IPv4 direction:
+   *
+   *        A.  If there is a Fragment Header in the IPv6 packet, the last 16
+   *            bits of its value MUST be used for the IPv4 identification
+   *            value.
+   *
+   *        B.  If there is no Fragment Header in the IPv6 packet:
+   *
+   *            a.  If the packet is less than or equal to 1280 bytes:
+   *
+   *                -  The translator SHOULD set DF to 0 and generate an IPv4
+   *                   identification value.
+   *
+   *                -  To avoid the problems described in [RFC4963], it is
+   *                   RECOMMENDED that the translator maintain 3-tuple state
+   *                   for generating the IPv4 identification value.
+   *
+   *            b.  If the packet is greater than 1280 bytes, the translator
+   *                SHOULD set the IPv4 DF bit to 1.
    */
+
+  return 0;
+}
+
+static uint16_t nat46_fixup_icmp6_time_exceed(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+  /*
+   * Time Exceeded (Type 3):  Set the Type to 11, and adjust the ICMPv4
+   * checksum both to take the type change into account and to
+   * exclude the ICMPv6 pseudo-header.  The Code is unchanged.
+   */
+  u8 *prfc4884len6 = icmp6_rfc4884len_ptr(icmp6h);
+  /* FIXME: http://tools.ietf.org/html/rfc4884 */
+
+  icmp6h->icmp6_type = 11;
   return 0;
 }
 
@@ -366,6 +443,33 @@ static uint16_t nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6
    *     |24-39| Destination Address      | 16  | Destination Address      |
    *     +--------------------------------+--------------------------------+
    */
+  static int ptr6_4[] = { 0, 1, -1, -1, 2, 2, 9, 8,
+                          12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+                          16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, -1 };
+  u32 *pptr6 = icmp6_parameter_ptr(icmp6h);
+  int new_pptr = -1;
+
+  switch(icmp6h->icmp6_code) {
+    case 0:
+      if(*pptr6 < sizeof(ptr6_4)/sizeof(ptr6_4[0])) {
+        new_pptr = ptr6_4[*pptr6];
+        if (new_pptr >= 0) {
+          /* FIXME: store the new parameter pointer into ICMP4 */
+        } else {
+          ip6h->nexthdr = NEXTHDR_NONE;
+        }
+      } else {
+        ip6h->nexthdr = NEXTHDR_NONE;
+      }
+      break;
+    case 1:
+      icmp6h->icmp6_type = 3;
+      icmp6h->icmp6_code = 2;
+      break;
+    case 2: /* fallthrough to default */
+    default:
+      ip6h->nexthdr = NEXTHDR_NONE;
+  }
   return 0;
 }
 
@@ -390,6 +494,8 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
         ret = icmp6h->icmp6_identifier;
         nat46debug(3, "ICMPv6 echo reply translated into IPv4, id: %d", ntohs(ret)); 
         break;
+      default:
+        ip6h->nexthdr = NEXTHDR_NONE;
     }
   } else {
     /* ICMPv6 errors */
@@ -401,22 +507,16 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
         ret = nat46_fixup_icmp6_pkt_toobig(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_TIME_EXCEED:
-        /*
-         * Time Exceeded (Type 3):  Set the Type to 11, and adjust the ICMPv4
-         * checksum both to take the type change into account and to
-         * exclude the ICMPv6 pseudo-header.  The Code is unchanged.
-         */
-	icmp6h->icmp6_type = 11;
+        ret = nat46_fixup_icmp6_time_exceed(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_PARAMPROB:
         ret = nat46_fixup_icmp6_paramprob(nat46, ip6h, icmp6h, old_skb);
         break;
       default:
-        ip6h->nexthdr = 0;
+        ip6h->nexthdr = NEXTHDR_NONE;
     }
   }
   return ret;
-  /* FIXME: http://tools.ietf.org/html/rfc4884 */
 }
 
 
@@ -988,9 +1088,16 @@ int xlate_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv
   return ret;
 }
 
-u8 *icmp_parameter_ptr(struct icmphdr *icmph) {
-  u8 *icmp_pptr = ((u8 *)(icmph))+4;
-  return icmp_pptr;
+static uint16_t nat46_fixup_icmp_time_exceeded(nat46_instance_t *nat46, struct iphdr *iph, struct icmphdr *icmph, struct sk_buff *old_skb) {
+  /*
+   * Set the Type to 3, and adjust the
+   * ICMP checksum both to take the type change into account and
+   * to include the ICMPv6 pseudo-header.  The Code is unchanged.
+   */
+  u8 *prfc4884len4 = icmp_rfc4884len_ptr(icmph);
+  /* FIXME: http://tools.ietf.org/html/rfc4884 */
+  icmph->type = 3;
+  return 0;
 }
 
 static uint16_t nat46_fixup_icmp_parameterprob(nat46_instance_t *nat46, struct iphdr *iph, struct icmphdr *icmph, struct sk_buff *old_skb) {
@@ -1034,14 +1141,20 @@ static uint16_t nat46_fixup_icmp_parameterprob(nat46_instance_t *nat46, struct i
    *     |16-19| Destination Address      | 24  | Destination Address      |
    *     +--------------------------------+--------------------------------+
    */
+  u8 *prfc4884len4 = icmp_rfc4884len_ptr(icmph);
+  /* FIXME: http://tools.ietf.org/html/rfc4884 */
   static int ptr4_6[] = { 0, 1, 4, 4, -1, -1, -1, -1, 7, 6, -1, -1, 8, 8, 8, 8, 24, 24, 24, 24, -1 };
   u8 *icmp_pptr = icmp_parameter_ptr(icmph);
+  int new_pptr = -1;
   switch (icmph->code) {
     case 0:
     case 2:
       if (*icmp_pptr < (sizeof(ptr4_6)/sizeof(ptr4_6[0]))) {
         icmph->code = 0;
-        /* *icmp6_pptr = ptr4_6[*icmp_pptr]; */
+        new_pptr = ptr4_6[*icmp_pptr];
+        if(new_pptr >= 0) { 
+          /* FIXME: update the parameter pointer in ICMPv6 with new_pptr value */
+        }
       } else {
         iph->protocol = NEXTHDR_NONE;
       }
@@ -1112,13 +1225,16 @@ static uint16_t nat46_fixup_icmp_dest_unreach(nat46_instance_t *nat46, struct ip
    *    Other Code values:  Silently drop.
    *
    */
+  u8 *prfc4884len4 = icmp_rfc4884len_ptr(icmph);
+  /* FIXME: http://tools.ietf.org/html/rfc4884 */
+
   switch (icmph->code) {
     case 0:
     case 1:
       icmph->code = 0;
       break;
     case 2:
-      /* *(icmp_parameter_ptr(icmph)) = 6; */
+      /* FIXME: set ICMPv6 parameter pointer to 6 */
       icmph->type = 4;
       icmph->code = 1;
       break;
@@ -1134,8 +1250,18 @@ static uint16_t nat46_fixup_icmp_dest_unreach(nat46_instance_t *nat46, struct ip
        * need to ensure it does not overshoot our egress link MTU,
        * which implies knowing the egress interface, which is
        * not trivial in the current model.
-       * So, for now just leave the MTU in the packet as is.
+       *
+       * So, we'd want to leave the MTU as aside. But, the Section 6
+       * has something more to say:
+       *
+       *   1.  In the IPv4-to-IPv6 direction: if the MTU value of ICMPv4 Packet
+       *     Too Big (PTB) messages is less than 1280, change it to 1280.
+       *     This is intended to cause the IPv6 host and IPv6 firewall to
+       *     process the ICMP PTB message and generate subsequent packets to
+       *     this destination with an IPv6 Fragment Header.
+       *
        */
+      /* FIXME: check if MTU < 1280, and change it to 1280 then */
       icmph->type = 2;
       icmph->code = 0;
       break;
@@ -1184,12 +1310,7 @@ static uint16_t nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, str
       nat46debug(3, "ICMP echo reply translated into IPv6, id: %d", ntohs(ret)); 
       break;
     case ICMP_TIME_EXCEEDED:
-      /*
-       * Set the Type to 3, and adjust the
-       * ICMP checksum both to take the type change into account and
-       * to include the ICMPv6 pseudo-header.  The Code is unchanged.
-       */
-      icmph->type = 3;
+      ret = nat46_fixup_icmp_time_exceeded(nat46, iph, icmph, old_skb);
       break;
     case ICMP_PARAMETERPROB:
       ret = nat46_fixup_icmp_parameterprob(nat46, iph, icmph, old_skb);
