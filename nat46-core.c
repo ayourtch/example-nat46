@@ -538,9 +538,6 @@ int ip6_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *ip6h, stru
   return 0;
 }
 
-
-__u32 xxx_my_v4addr;
-
 struct sk_buff *try_reassembly(nat46_instance_t *nat46, struct sk_buff *old_skb) {
   struct ipv6hdr * hdr = ipv6_hdr(old_skb);
   struct frag_hdr *fh = (struct frag_hdr*)(hdr + 1);
