@@ -715,6 +715,17 @@ void *get_next_header_ptr6(void *pv6, int v6_len) {
   return (ip6h+1);
 }
 
+void fill_v4hdr_from_v6hdr(struct iphdr * iph, struct ipv6hdr *ip6h, __u32 v4saddr, __u32 v4daddr) {
+  iph->ttl = ip6h->hop_limit;
+  iph->saddr = v4saddr;
+  iph->daddr = v4daddr;
+  iph->protocol = ip6h->nexthdr;
+  *((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (0x00/*tos*/ & 0xff));
+  iph->frag_off = htons(IP_DF);
+  iph->tot_len = htons( ntohs(ip6h->payload_len)+ 20 /*sizeof(ipv4hdr)*/ );
+  iph->check = 0;
+  iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
+}
 
 /*
  * pv6 is pointing to the ipv6 header inside the payload.
@@ -767,14 +778,8 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len, uint16_t 
   if(!xlate_v6_to_v4(nat46, &nat46->remote_rule, &ip6h->daddr, &v4daddr)) {
     nat46debug(0, "[nat46] Could not translate inner dest address v6->v4");
   }
-  iph->ttl = ip6h->hop_limit;
-  iph->saddr = v4saddr;
-  iph->daddr = v4daddr;
-  iph->protocol = ip6h->nexthdr;
-  *((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (0x00/*tos*/ & 0xff));
-  iph->frag_off = htons(IP_DF);
-  iph->tot_len = htons( ntohs(ip6h->payload_len)+ 20 /*sizeof(ipv4hdr)*/ );
-  iph->check = 0;
+
+  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr);
 
   /* FIXME: get rid of magic numbers below */
   memmove(((char *)pv6) + 20, get_next_header_ptr6(ip6h, v6_len), v6_len - 20);
@@ -1500,22 +1505,12 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
 
   /* build IPv4 header */
   iph = ip_hdr(new_skb);
-  iph->ttl = ip6h->hop_limit;
-  iph->saddr = v4saddr;
-  iph->daddr = v4daddr;
-  iph->protocol = ip6h->nexthdr;
-  *((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (0x00/*tos*/ & 0xff));
-  iph->frag_off = htons(IP_DF);
+  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr);
+  new_skb->protocol = htons(ETH_P_IP);
 
-  /* iph->tot_len = htons(new_skb->len); // almost good, but it may cause troubles with sizeof(IPv6 pkt)<64 (padding issue) */
-  iph->tot_len = htons( ntohs(ip6h->payload_len)+ 20 /*sizeof(ipv4hdr)*/ );
   if (ntohs(iph->tot_len) >= 2000) {
     nat46debug(0, "Too big IP len: %d", ntohs(iph->tot_len));
   }
-  iph->check = 0;
-  iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
-  new_skb->protocol = htons(ETH_P_IP);
-
   ipv4_update_csum(new_skb, iph); /* update L4 (TCP/UDP/ICMP) checksum */
 
   new_skb->dev = old_skb->dev;
