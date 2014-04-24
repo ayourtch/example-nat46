@@ -814,13 +814,16 @@ u32 *icmp6_parameter_ptr(struct icmp6hdr *icmp6h) {
 }
 
 /* Update ICMPv6 type/code with incremental checksum adjustment */
-void update_icmp6_type_code(struct icmp6hdr *icmp6h, u8 type, u8 code) {
+void update_icmp6_type_code(nat46_instance_t *nat46, struct icmp6hdr *icmp6h, u8 type, u8 code) {
   u16 old_tc = (((uint16_t)icmp6h->icmp6_type) << 8) + icmp6h->icmp6_code;
   u16 new_tc = (((uint16_t)type) << 8) + code;
   u16 old_csum = icmp6h->icmp6_cksum;
   /* https://tools.ietf.org/html/rfc1624 */
   u16 new_csum = ~(old_csum + (~old_tc) + new_tc);
+  nat46debug(1, "Updating the type to %d and code to %d. Old T/C: %04X, New T/C: %04X, Old CS: %04X, New CS: %04X", type, code, old_tc, new_tc, old_csum, new_csum); 
   icmp6h->icmp6_cksum = new_csum;
+  icmp6h->icmp6_type = type;
+  icmp6h->icmp6_code = code;
 }
 
 static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
@@ -861,13 +864,13 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
     case 0:
     case 2:
     case 3:
-      update_icmp6_type_code(icmp6h, 3, 1);
+      update_icmp6_type_code(nat46, icmp6h, 3, 1);
       break;
     case 1:
-      update_icmp6_type_code(icmp6h, 3, 10);
+      update_icmp6_type_code(nat46, icmp6h, 3, 10);
       break;
     case 4:
-      update_icmp6_type_code(icmp6h, 3, 3);
+      update_icmp6_type_code(nat46, icmp6h, 3, 3);
       break;
     default:
       ip6h->nexthdr = NEXTHDR_NONE;
@@ -926,7 +929,7 @@ static uint16_t nat46_fixup_icmp6_time_exceed(nat46_instance_t *nat46, struct ip
   /* FIXME: http://tools.ietf.org/html/rfc4884 */
   int len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h), &sport, &dport);
 
-  update_icmp6_type_code(icmp6h, 11, icmp6h->icmp6_code);
+  update_icmp6_type_code(nat46, icmp6h, 11, icmp6h->icmp6_code);
   return sport;
 }
 
@@ -985,7 +988,7 @@ static uint16_t nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6
       }
       break;
     case 1:
-      update_icmp6_type_code(icmp6h, 3, 2);
+      update_icmp6_type_code(nat46, icmp6h, 3, 2);
       break;
     case 2: /* fallthrough to default */
     default:
@@ -1006,12 +1009,12 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
     /* Informational ICMP */
     switch(icmp6h->icmp6_type) {
       case ICMPV6_ECHO_REQUEST:
-        update_icmp6_type_code(icmp6h, ICMP_ECHO, icmp6h->icmp6_code);
+        update_icmp6_type_code(nat46, icmp6h, ICMP_ECHO, icmp6h->icmp6_code);
         ret = icmp6h->icmp6_identifier;
         nat46debug(3, "ICMPv6 echo request translated into IPv4, id: %d", ntohs(ret)); 
         break;
       case ICMPV6_ECHO_REPLY:
-        update_icmp6_type_code(icmp6h, ICMP_ECHOREPLY, icmp6h->icmp6_code);
+        update_icmp6_type_code(nat46, icmp6h, ICMP_ECHOREPLY, icmp6h->icmp6_code);
         ret = icmp6h->icmp6_identifier;
         nat46debug(3, "ICMPv6 echo reply translated into IPv4, id: %d", ntohs(ret)); 
         break;
@@ -1567,7 +1570,6 @@ void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
     case NEXTHDR_ICMP: {
       struct icmp6hdr *icmp6h = (struct icmp6hdr *)(ip6hdr + 1);
       unsigned icmp6len = 0;
-
       icmp6len = ntohs(ip6hdr->payload_len); /* ICMP header + payload */
       icmp6h->icmp6_cksum = 0;
       sum1 = csum_partial((char*)icmp6h, icmp6len, 0); /* calculate checksum for TCP hdr+payload */
