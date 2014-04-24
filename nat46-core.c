@@ -861,13 +861,13 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
     case 0:
     case 2:
     case 3:
-      update_icmp6_type_code(icmph, 3, 1);
+      update_icmp6_type_code(icmp6h, 3, 1);
       break;
     case 1:
-      update_icmp6_type_code(icmph, 3, 10);
+      update_icmp6_type_code(icmp6h, 3, 10);
       break;
     case 4:
-      update_icmp6_type_code(icmph, 3, 3);
+      update_icmp6_type_code(icmp6h, 3, 3);
       break;
     default:
       ip6h->nexthdr = NEXTHDR_NONE;
