@@ -627,7 +627,7 @@ int xlate_map_v4_to_v6(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *
   return ret;
 }
 
-int xlate_map_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv6, void *pipv4, uint16_t l4id, int version) {
+int xlate_map_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv6, void *pipv4, int version) {
   int ret = 0;
 
   uint8_t psid_bits_len;
@@ -686,7 +686,7 @@ int xlate_v4_to_v6(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv
   return ret;
 }
 
-int xlate_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv6, void *pipv4, uint16_t l4id) {
+int xlate_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv6, void *pipv4) {
   int ret = 0;
   switch(rule->style) {
     case NAT46_XLATE_NONE: /* always fail unless it is a host 1:1 translation */
@@ -697,10 +697,10 @@ int xlate_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv
       }
       break;
     case NAT46_XLATE_MAP0:
-      ret = xlate_map_v6_to_v4(nat46, rule, pipv6, pipv4, l4id, 0);
+      ret = xlate_map_v6_to_v4(nat46, rule, pipv6, pipv4, 0);
       break;
     case NAT46_XLATE_MAP:
-      ret = xlate_map_v6_to_v4(nat46, rule, pipv6, pipv4, l4id, 1);
+      ret = xlate_map_v6_to_v4(nat46, rule, pipv6, pipv4, 1);
       break;
     case NAT46_XLATE_RFC6052:
       ret = xlate_nat64_to_v4(nat46, rule, pipv6, pipv4);
@@ -761,10 +761,10 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len, uint16_t 
    * The packet is supposedly our own packet after translation - so the rules
    * will be swapped compared to translation of the outer packet
    */
-  if(!xlate_v6_to_v4(nat46, &nat46->local_rule, &ip6h->saddr, &v4saddr, sport)) {
+  if(!xlate_v6_to_v4(nat46, &nat46->local_rule, &ip6h->saddr, &v4saddr)) {
     nat46debug(0, "[nat46] Could not translate inner source address v6->v4");
   }
-  if(!xlate_v6_to_v4(nat46, &nat46->remote_rule, &ip6h->daddr, &v4daddr, dport)) {
+  if(!xlate_v6_to_v4(nat46, &nat46->remote_rule, &ip6h->daddr, &v4daddr)) {
     nat46debug(0, "[nat46] Could not translate inner dest address v6->v4");
   }
   iph->ttl = ip6h->hop_limit;
@@ -1466,11 +1466,11 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   }
 
 
-  if(!xlate_v6_to_v4(nat46, &nat46->local_rule, &ip6h->daddr, &v4daddr, dport)) {
+  if(!xlate_v6_to_v4(nat46, &nat46->local_rule, &ip6h->daddr, &v4daddr)) {
     nat46debug(0, "[nat46] Could not translate local address v6->v4");
     goto done;
   }
-  if(!xlate_v6_to_v4(nat46, &nat46->remote_rule, &ip6h->saddr, &v4saddr, sport)) {
+  if(!xlate_v6_to_v4(nat46, &nat46->remote_rule, &ip6h->saddr, &v4saddr)) {
     if(proto == NEXTHDR_ICMP) {
       nat46debug(1, "[nat46] Could not translate remote address v6->v4, but protocol is ICMP6, so using our local addr as a stub");
       v4saddr = v4daddr;
