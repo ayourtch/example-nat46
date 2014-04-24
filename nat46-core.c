@@ -737,7 +737,7 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len, uint16_t 
   __u32 v4saddr, v4daddr;
   uint16_t sport, dport;
   struct iphdr new_ipv4;
-  struct iphdr * iph = &new_ipv4;
+  struct iphdr *iph = &new_ipv4;
 
   switch(ip6h->nexthdr) {
     case NEXTHDR_TCP: {
