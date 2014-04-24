@@ -1080,6 +1080,8 @@ void handle_v6_packet(dbuf_t *d) {
   if (sk.protocol == htons(ETH_P_IPV6)) {
     // debug_dump(DBG_GLOBAL, 0, d->buf, d->dsize);
     sk.network_header = ETHER_SIZE;
+    // FIXME: this is not correct/complete - will break cases with fragments.
+    sk.transport_header = sk.network_header + 40;
     sk.head = sk.dbuf->buf;
     sk.end = sk.dbuf->buf + sk.dbuf->dsize;
     sk.data = sk.dbuf->buf + sk.network_header;
