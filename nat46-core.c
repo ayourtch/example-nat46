@@ -732,24 +732,19 @@ void fill_v4hdr_from_v6hdr(struct iphdr * iph, struct ipv6hdr *ip6h, __u32 v4sad
  * Translate this header and attempt to extract the sport/dport
  * so the callers can use them for translation as well.
  */
-int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len, uint16_t *psport, uint16_t *pdport) {
+int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len) {
   struct ipv6hdr *ip6h = pv6;
   __u32 v4saddr, v4daddr;
-  uint16_t sport, dport;
   struct iphdr new_ipv4;
   struct iphdr *iph = &new_ipv4;
 
   switch(ip6h->nexthdr) {
     case NEXTHDR_TCP: {
       struct tcphdr *th = get_next_header_ptr6(ip6h, v6_len);
-      sport = th->source;
-      dport = th->dest;
       break;
     }
     case NEXTHDR_UDP: {
       struct udphdr *udp = get_next_header_ptr6(ip6h, v6_len);
-      sport = udp->source;
-      dport = udp->dest;
       break;
     }
     case NEXTHDR_ICMP: {
@@ -757,14 +752,12 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len, uint16_t 
       switch(icmp6h->icmp6_type) {
         case ICMPV6_ECHO_REQUEST:
           icmp6h->icmp6_type = ICMP_ECHO;
-          sport = dport = icmp6h->icmp6_identifier;
           break;
         case ICMPV6_ECHO_REPLY:
           icmp6h->icmp6_type = ICMP_ECHOREPLY;
-          sport = dport = icmp6h->icmp6_identifier;
           break;
         default:
-          sport = dport = 0;
+          break;
       }
     }
   }
@@ -784,12 +777,6 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len, uint16_t 
   /* FIXME: get rid of magic numbers below */
   memmove(((char *)pv6) + 20, get_next_header_ptr6(ip6h, v6_len), v6_len - 20);
   memcpy(pv6, iph, 20);
-  if (psport) {
-    *psport = sport;
-  }
-  if (pdport) {
-    *pdport = dport;
-  }
   return (v6_len - 20);
 }
 
@@ -826,7 +813,7 @@ void update_icmp6_type_code(nat46_instance_t *nat46, struct icmp6hdr *icmp6h, u8
   icmp6h->icmp6_code = code;
 }
 
-static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+static void nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
   /*
    * Destination Unreachable (Type 1)  Set the Type to 3, and adjust
    * the ICMP checksum both to take the type/code change into
@@ -857,7 +844,6 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
 
   u8 *prfc4884len6 = icmp6_rfc4884len_ptr(icmp6h);
   /* FIXME: http://tools.ietf.org/html/rfc4884 */
-  uint16_t sport, dport;
   int len;
 
   switch(icmp6h->icmp6_code) {
@@ -875,11 +861,10 @@ static uint16_t nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct i
     default:
       ip6h->nexthdr = NEXTHDR_NONE;
   }
-  len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h), &sport, &dport);
-  return sport;
+  len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h));
 }
 
-static uint16_t nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+static void nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
   /*
    * Packet Too Big (Type 2):  Translate to an ICMPv4 Destination
    * Unreachable (Type 3) with Code 4, and adjust the ICMPv4
@@ -915,25 +900,22 @@ static uint16_t nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv
    *                SHOULD set the IPv4 DF bit to 1.
    */
 
-  return 0;
 }
 
-static uint16_t nat46_fixup_icmp6_time_exceed(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+static void nat46_fixup_icmp6_time_exceed(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
   /*
    * Time Exceeded (Type 3):  Set the Type to 11, and adjust the ICMPv4
    * checksum both to take the type change into account and to
    * exclude the ICMPv6 pseudo-header.  The Code is unchanged.
    */
   u8 *prfc4884len6 = icmp6_rfc4884len_ptr(icmp6h);
-  uint16_t sport, dport;
   /* FIXME: http://tools.ietf.org/html/rfc4884 */
-  int len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h), &sport, &dport);
+  int len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h));
 
   update_icmp6_type_code(nat46, icmp6h, 11, icmp6h->icmp6_code);
-  return sport;
 }
 
-static uint16_t nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+static void nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
   /*
    *         Parameter Problem (Type 4):  Translate the Type and Code as
    *         follows, and adjust the ICMPv4 checksum both to take the type/
@@ -994,14 +976,12 @@ static uint16_t nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6
     default:
       ip6h->nexthdr = NEXTHDR_NONE;
   }
-  return 0;
 }
 
 /* Fixup ICMP6->ICMP before IP header translation, according to http://tools.ietf.org/html/rfc6145 */
 
-static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
+static void nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
   struct icmp6hdr *icmp6h = (struct icmp6hdr *)(ip6h + 1);
-  uint16_t ret = 0;
 
   ip6h->nexthdr = IPPROTO_ICMP;
 
@@ -1010,13 +990,9 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
     switch(icmp6h->icmp6_type) {
       case ICMPV6_ECHO_REQUEST:
         update_icmp6_type_code(nat46, icmp6h, ICMP_ECHO, icmp6h->icmp6_code);
-        ret = icmp6h->icmp6_identifier;
-        nat46debug(3, "ICMPv6 echo request translated into IPv4, id: %d", ntohs(ret)); 
         break;
       case ICMPV6_ECHO_REPLY:
         update_icmp6_type_code(nat46, icmp6h, ICMP_ECHOREPLY, icmp6h->icmp6_code);
-        ret = icmp6h->icmp6_identifier;
-        nat46debug(3, "ICMPv6 echo reply translated into IPv4, id: %d", ntohs(ret)); 
         break;
       default:
         ip6h->nexthdr = NEXTHDR_NONE;
@@ -1025,22 +1001,21 @@ static uint16_t nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h,
     /* ICMPv6 errors */
     switch(icmp6h->icmp6_type) {
       case ICMPV6_DEST_UNREACH:
-        ret = nat46_fixup_icmp6_dest_unreach(nat46, ip6h, icmp6h, old_skb);
+        nat46_fixup_icmp6_dest_unreach(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_PKT_TOOBIG:
-        ret = nat46_fixup_icmp6_pkt_toobig(nat46, ip6h, icmp6h, old_skb);
+        nat46_fixup_icmp6_pkt_toobig(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_TIME_EXCEED:
-        ret = nat46_fixup_icmp6_time_exceed(nat46, ip6h, icmp6h, old_skb);
+        nat46_fixup_icmp6_time_exceed(nat46, ip6h, icmp6h, old_skb);
         break;
       case ICMPV6_PARAMPROB:
-        ret = nat46_fixup_icmp6_paramprob(nat46, ip6h, icmp6h, old_skb);
+        nat46_fixup_icmp6_paramprob(nat46, ip6h, icmp6h, old_skb);
         break;
       default:
         ip6h->nexthdr = NEXTHDR_NONE;
     }
   }
-  return ret;
 }
 
 
@@ -1425,7 +1400,7 @@ static uint16_t nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, str
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
-  uint16_t proto, sport = 0, dport = 0;
+  uint16_t proto;
 
   struct iphdr * iph;
   __u32 v4saddr, v4daddr;
@@ -1457,18 +1432,14 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   switch(proto) {
     case NEXTHDR_TCP: {
       struct tcphdr *th = tcp_hdr(old_skb);
-      sport = th->source;
-      dport = th->dest;
       break;
       }
     case NEXTHDR_UDP: {
       struct udphdr *udp = udp_hdr(old_skb);
-      sport = udp->source;
-      dport = udp->dest;
       break;
       }
     case NEXTHDR_ICMP:
-      sport = dport = nat46_fixup_icmp6(nat46, ip6h, old_skb);
+      nat46_fixup_icmp6(nat46, ip6h, old_skb);
       break;
     case NEXTHDR_FRAGMENT:
       nat46debug(2, "[ipv6] Next header is fragment. Not doing anything.");
