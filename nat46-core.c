@@ -994,6 +994,7 @@ static void nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6hdr 
                           12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
                           16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, -1 };
   u32 *pptr6 = icmp6_parameter_ptr(icmp6h);
+  u8 *pptr4 = icmp_parameter_ptr((struct icmphdr *)icmp6h);
   int new_pptr = -1;
 
   switch(icmp6h->icmp6_code) {
@@ -1002,6 +1003,8 @@ static void nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6hdr 
         new_pptr = ptr6_4[*pptr6];
         if (new_pptr >= 0) {
           /* FIXME: store the new parameter pointer into ICMP4 while updating the checksum */
+          icmp6h->icmp6_cksum = csum16_upd(icmp6h->icmp6_cksum, (*pptr6 & 0xffff), (new_pptr << 8));
+          *pptr4 = 0xff & new_pptr;
         } else {
           ip6h->nexthdr = NEXTHDR_NONE;
         }
