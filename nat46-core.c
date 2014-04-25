@@ -652,20 +652,93 @@ int xlate_v6_to_v4(nat46_instance_t *nat46, nat46_xlate_rule_t *rule, void *pipv
   return ret;
 }
 
+__sum16 csum16_upd(__sum16 csum, u16 old, u16 new) {
+  u32 s;
+  csum = ntohs(~csum);
+  s = (u32)csum + ntohs(~old) + ntohs(new);
+  return htons(~ (u16)( ((s >> 16) & 0xffff) + (s & 0xffff)));
+}
+
+/* Add the TCP/UDP pseudoheader, basing on the existing checksum */
+
+__sum16 csum_tcpudp_remagic(__be32 saddr, __be32 daddr, unsigned short len,
+                  unsigned char proto, u16 csum) {
+  u16 *pdata;
+  int i;
+  u16 len0, len1;
+
+  pdata = (u16 *)&saddr;
+  csum = csum16_upd(csum, 0, *pdata++);
+  csum = csum16_upd(csum, 0, *pdata++);
+  pdata = (u16 *)&daddr;
+  csum = csum16_upd(csum, 0, *pdata++);
+  csum = csum16_upd(csum, 0, *pdata++);
+
+  csum = csum16_upd(csum, 0, htons(proto));
+  len1 = htons( (len >> 16) & 0xffff );
+  len0 = htons(len & 0xffff);
+  csum = csum16_upd(csum, 0, len1);
+  csum = csum16_upd(csum, 0, len0);
+  return csum;
+}
+
+/* Undo the IPv6 pseudoheader inclusion into the checksum */
+__sum16 csum_ipv6_unmagic(nat46_instance_t *nat46, const struct in6_addr *saddr,
+                        const struct in6_addr *daddr,
+                        __u32 len, unsigned short proto,
+                        __sum16 csum) {
+  u16 *pdata;
+  int i;
+  u16 len0, len1;
+
+  pdata = (u16 *)saddr;
+  for(i=0;i<8;i++) {
+    csum = csum16_upd(csum, *pdata, 0);
+    pdata++;
+  }
+  pdata = (u16 *)daddr;
+  for(i=0;i<8;i++) {
+    csum = csum16_upd(csum, *pdata, 0);
+    pdata++;
+  }
+  csum = csum16_upd(csum, htons(proto), 0);
+  len1 = htons( (len >> 16) & 0xffff );
+  len0 = htons(len & 0xffff);
+  csum = csum16_upd(csum, len1, 0);
+  csum = csum16_upd(csum, len0, 0);
+  return csum;
+}
+
+/* Update ICMPv6 type/code with incremental checksum adjustment */
+void update_icmp6_type_code(nat46_instance_t *nat46, struct icmp6hdr *icmp6h, u8 type, u8 code) {
+  u16 old_tc = (((uint16_t)icmp6h->icmp6_code) << 8) + icmp6h->icmp6_type;
+  u16 new_tc = (((uint16_t)code) << 8) + type;
+  u16 old_csum = icmp6h->icmp6_cksum;
+  /* https://tools.ietf.org/html/rfc1624 */
+  u16 new_csum = csum16_upd(old_csum, old_tc, new_tc);
+  nat46debug(1, "Updating the ICMPv6 type to ICMP type %d and code to %d. Old T/C: %04X, New T/C: %04X, Old CS: %04X, New CS: %04X", type, code, old_tc, new_tc, old_csum, new_csum);
+  icmp6h->icmp6_cksum = new_csum;
+  icmp6h->icmp6_type = type;
+  icmp6h->icmp6_code = code;
+}
+
+
+
 /* FIXME: traverse the headers properly */
 void *get_next_header_ptr6(void *pv6, int v6_len) {
   struct ipv6hdr *ip6h = pv6;
   return (ip6h+1);
 }
 
-void fill_v4hdr_from_v6hdr(struct iphdr * iph, struct ipv6hdr *ip6h, __u32 v4saddr, __u32 v4daddr) {
+void fill_v4hdr_from_v6hdr(struct iphdr * iph, struct ipv6hdr *ip6h, __u32 v4saddr, __u32 v4daddr, __u16 id, __u16 frag_off, __u16 proto, int l3_payload_len) {
   iph->ttl = ip6h->hop_limit;
   iph->saddr = v4saddr;
   iph->daddr = v4daddr;
-  iph->protocol = ip6h->nexthdr;
+  iph->protocol = proto;
   *((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (0x00/*tos*/ & 0xff));
-  iph->frag_off = htons(IP_DF);
-  iph->tot_len = htons( ntohs(ip6h->payload_len)+ 20 /*sizeof(ipv4hdr)*/ );
+  iph->frag_off = frag_off;
+  iph->id = id;
+  iph->tot_len = htons( l3_payload_len + 20 /*sizeof(ipv4hdr)*/ );
   iph->check = 0;
   iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
 }
@@ -675,35 +748,13 @@ void fill_v4hdr_from_v6hdr(struct iphdr * iph, struct ipv6hdr *ip6h, __u32 v4sad
  * Translate this header and attempt to extract the sport/dport
  * so the callers can use them for translation as well.
  */
-int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len) {
+int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, void *ptrans_hdr, int v6_len) {
   struct ipv6hdr *ip6h = pv6;
   __u32 v4saddr, v4daddr;
   struct iphdr new_ipv4;
   struct iphdr *iph = &new_ipv4;
+  u16 proto = ip6h->nexthdr;
 
-  switch(ip6h->nexthdr) {
-    case NEXTHDR_TCP: {
-      struct tcphdr *th = get_next_header_ptr6(ip6h, v6_len);
-      break;
-    }
-    case NEXTHDR_UDP: {
-      struct udphdr *udp = get_next_header_ptr6(ip6h, v6_len);
-      break;
-    }
-    case NEXTHDR_ICMP: {
-      struct icmp6hdr *icmp6h = get_next_header_ptr6(ip6h, v6_len);
-      switch(icmp6h->icmp6_type) {
-        case ICMPV6_ECHO_REQUEST:
-          icmp6h->icmp6_type = ICMP_ECHO;
-          break;
-        case ICMPV6_ECHO_REPLY:
-          icmp6h->icmp6_type = ICMP_ECHOREPLY;
-          break;
-        default:
-          break;
-      }
-    }
-  }
   /*
    * The packet is supposedly our own packet after translation - so the rules
    * will be swapped compared to translation of the outer packet
@@ -715,7 +766,37 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, int v6_len) {
     nat46debug(0, "[nat46] Could not translate inner dest address v6->v4");
   }
 
-  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr);
+  switch(proto) {
+    case NEXTHDR_TCP: {
+      struct tcphdr *th = ptrans_hdr;
+      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), ip6h->nexthdr, th->check);
+      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, ntohs(ip6h->payload_len), NEXTHDR_TCP, sum1); /* add pseudoheader */
+      th->check = sum2;
+      break;
+      }
+    case NEXTHDR_UDP: {
+      struct udphdr *udp = ptrans_hdr;
+      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), ip6h->nexthdr, udp->check);
+      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, ntohs(ip6h->payload_len), NEXTHDR_UDP, sum1); /* add pseudoheader */
+      udp->check = sum2;
+      break;
+      }
+    case NEXTHDR_ICMP: {
+      struct icmp6hdr *icmp6h = ptrans_hdr;
+      switch(icmp6h->icmp6_type) {
+        case ICMPV6_ECHO_REQUEST:
+          update_icmp6_type_code(nat46, icmp6h, ICMP_ECHO, icmp6h->icmp6_code);
+          break;
+        case ICMPV6_ECHO_REPLY:
+          update_icmp6_type_code(nat46, icmp6h, ICMP_ECHOREPLY, icmp6h->icmp6_code);
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr, 0, htons(IP_DF), ip6h->nexthdr, ntohs(ip6h->payload_len));
 
   /* FIXME: get rid of magic numbers below */
   memmove(((char *)pv6) + 20, get_next_header_ptr6(ip6h, v6_len), v6_len - 20);
@@ -741,26 +822,6 @@ u8 *icmp_parameter_ptr(struct icmphdr *icmph) {
 u32 *icmp6_parameter_ptr(struct icmp6hdr *icmp6h) {
   u32 *icmp6_pptr = ((u32 *)(icmp6h))+1;
   return icmp6_pptr;
-}
-
-__sum16 csum16_upd(__sum16 csum, u16 old, u16 new) {
-  u32 s;
-  csum = ntohs(~csum);
-  s = (u32)csum + ntohs(~old) + ntohs(new);
-  return htons(~ (u16)( ((s >> 16) & 0xffff) + (s & 0xffff)));
-}
-
-/* Update ICMPv6 type/code with incremental checksum adjustment */
-void update_icmp6_type_code(nat46_instance_t *nat46, struct icmp6hdr *icmp6h, u8 type, u8 code) {
-  u16 old_tc = (((uint16_t)icmp6h->icmp6_code) << 8) + icmp6h->icmp6_type;
-  u16 new_tc = (((uint16_t)code) << 8) + type;
-  u16 old_csum = icmp6h->icmp6_cksum;
-  /* https://tools.ietf.org/html/rfc1624 */
-  u16 new_csum = csum16_upd(old_csum, old_tc, new_tc);
-  nat46debug(1, "Updating the type to %d and code to %d. Old T/C: %04X, New T/C: %04X, Old CS: %04X, New CS: %04X", type, code, old_tc, new_tc, old_csum, new_csum); 
-  icmp6h->icmp6_cksum = new_csum;
-  icmp6h->icmp6_type = type;
-  icmp6h->icmp6_code = code;
 }
 
 static void nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
@@ -811,7 +872,8 @@ static void nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6h
     default:
       ip6h->nexthdr = NEXTHDR_NONE;
   }
-  len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h));
+  len = ntohs(ip6h->payload_len)-sizeof(*icmp6h);
+  len = xlate_payload6_to4(nat46, (icmp6h + 1), get_next_header_ptr6((icmp6h + 1), len), len);
 }
 
 static void nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
@@ -860,7 +922,8 @@ static void nat46_fixup_icmp6_time_exceed(nat46_instance_t *nat46, struct ipv6hd
    */
   u8 *prfc4884len6 = icmp6_rfc4884len_ptr(icmp6h);
   /* FIXME: http://tools.ietf.org/html/rfc4884 */
-  int len = xlate_payload6_to4(nat46, (icmp6h + 1), ntohs(ip6h->payload_len)-sizeof(*icmp6h));
+  int len = ntohs(ip6h->payload_len)-sizeof(*icmp6h);
+  len = xlate_payload6_to4(nat46, (icmp6h + 1), get_next_header_ptr6((icmp6h + 1), len), len);
 
   update_icmp6_type_code(nat46, icmp6h, 11, icmp6h->icmp6_code);
 }
@@ -929,41 +992,9 @@ static void nat46_fixup_icmp6_paramprob(nat46_instance_t *nat46, struct ipv6hdr 
 }
 
 
-/* Undo the IPv6 pseudoheader inclusion into the checksum */
-__sum16 csum_ipv6_unmagic(nat46_instance_t *nat46, const struct in6_addr *saddr,
-                        const struct in6_addr *daddr,
-                        __u32 len, unsigned short proto,
-                        __sum16 csum) {
-  u16 *pdata;
-  int i;
-  u16 len0, len1;
-
-  pdata = (u16 *)saddr;
-  for(i=0;i<8;i++) {
-    csum = csum16_upd(csum, *pdata, 0);
-    pdata++;
-  }
-  pdata = (u16 *)daddr;
-  for(i=0;i<8;i++) {
-    csum = csum16_upd(csum, *pdata, 0);
-    pdata++;
-  }
-  csum = csum16_upd(csum, htons(proto), 0);
-  len1 = htons( (len >> 16) & 0xffff );
-  len0 = htons(len & 0xffff);
-  csum = csum16_upd(csum, len1, 0);
-  csum = csum16_upd(csum, len0, 0);
-  return csum;
-}
-
 /* Fixup ICMP6->ICMP before IP header translation, according to http://tools.ietf.org/html/rfc6145 */
 
-static void nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct sk_buff *old_skb) {
-  struct icmp6hdr *icmp6h = (struct icmp6hdr *)(ip6h + 1);
-
-  /* Remove IPv6 pseudoheader from checksum */
-  icmp6h->icmp6_cksum = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), ip6h->nexthdr, icmp6h->icmp6_cksum); 
-  ip6h->nexthdr = IPPROTO_ICMP;
+static void nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
 
   if(icmp6h->icmp6_type & 128) {
     /* Informational ICMP */
@@ -1015,127 +1046,6 @@ int ip6_input_not_interested(nat46_instance_t *nat46, struct ipv6hdr *ip6h, stru
   // FIXME: add the verification that the source is within the DMR
   // FIXME: add the verification that the destination matches our v6 "outside" address
   return 0;
-}
-
-struct sk_buff *try_reassembly(nat46_instance_t *nat46, struct sk_buff *old_skb) {
-  struct ipv6hdr * hdr = ipv6_hdr(old_skb);
-  struct frag_hdr *fh = (struct frag_hdr*)(hdr + 1);
-  struct sk_buff *new_frag = NULL;
-  struct sk_buff *ret_skb = NULL;
-  struct sk_buff *first_frag = NULL;
-  struct sk_buff *second_frag = NULL;
-  int i;
-  nat46_reasm_debug(1, "try_reassembly, frag_off value: %04x, nexthdr: %02x", fh->frag_off, fh->nexthdr);
-  if(fh->frag_off == 0) {
-    hdr->nexthdr = fh->nexthdr;
-    hdr->payload_len = htons(ntohs(hdr->payload_len) - sizeof(struct frag_hdr));
-    memmove(fh, (fh+1), old_skb->len - sizeof(struct frag_hdr));
-    old_skb->len -= sizeof(struct frag_hdr);
-    old_skb->end -= sizeof(struct frag_hdr);
-    old_skb->tail -= sizeof(struct frag_hdr);
-    nat46_reasm_debug(1, "reassembly successful, %ld bytes shorter!", sizeof(struct frag_hdr));
-    ret_skb = old_skb;
-  } else {
-    nat46_reasm_debug(1, "reassembly can not be done because fragment offset is nonzero: %04x", fh->frag_off); 
-    
-    for(i=0; 
-            i < nat46->nfrags && 
-            nat46->frags[i].identification != fh->identification && 
-            (0 != ipv6_addr_cmp(&hdr->saddr, &nat46->frags[i].saddr)) &&
-            (0 != ipv6_addr_cmp(&hdr->daddr, &nat46->frags[i].daddr));
-        i++);
-    if(i < nat46->nfrags) {
-      /* Found a matching fragment in the queue, try to coalesce. */
-        nat46_reasm_debug(1, "Found a matching frag id %08x queued at index %d", fh->identification, i);
-        nat46_reasm_debug(1, "Queue frag_off: %04x, len: %04x; Current frag_off: %04x, len: %04x", ntohs(nat46->frags[i].frag_off), ntohs(ipv6_hdr(nat46->frags[i].skb)->payload_len), ntohs(fh->frag_off), ntohs(hdr->payload_len));
-
-        if ( 
-               (ntohs(nat46->frags[i].frag_off) & IP6_MF) && (0 == (ntohs(nat46->frags[i].frag_off) & IP6_OFFSET)) &&
-               (0 == (ntohs(fh->frag_off) & IP6_MF)) && (ntohs(fh->frag_off) & IP6_OFFSET) ) {
-          first_frag = nat46->frags[i].skb;
-          second_frag = old_skb;
-          nat46_reasm_debug(1, "First fragment is in the queue, second fragment just arrived");
-        } else if (
-               (0 == (ntohs(nat46->frags[i].frag_off) & IP6_MF)) && (ntohs(nat46->frags[i].frag_off) & IP6_OFFSET) &&
-               (ntohs(fh->frag_off) & IP6_MF) && (0 == (ntohs(fh->frag_off) & IP6_OFFSET)) ) {
-          first_frag = old_skb;
-          second_frag = nat46->frags[i].skb;
-          nat46_reasm_debug(1, "Second fragment is in the queue, first fragment just arrived");
-        } else {
-          first_frag = NULL;
-          second_frag = nat46->frags[i].skb;
-          nat46_reasm_debug(1, "Not sure which fragment is where, will just delete the frag from queue");
-        }
-        if (first_frag) {
-          struct frag_hdr *fh1 = (struct frag_hdr*)(ipv6_hdr(first_frag) + 1);
-          struct frag_hdr *fh2 = (struct frag_hdr*)(ipv6_hdr(second_frag) + 1);
-
-          if (ntohs(ipv6_hdr(first_frag)->payload_len) - sizeof(struct frag_hdr) == (IP6_OFFSET & ntohs(fh2->frag_off))) {
-/*
-            nat46_reasm_debug(1, "oldskb delta from head: data: %d, tail: %d, end: %d", old_skb->data - old_skb->head, 
-                                 old_skb->tail - old_skb->head, old_skb->end - old_skb->head);
-*/
-            nat46_reasm_debug(1, "expanding by: %ld\n", ntohs(ipv6_hdr(second_frag)->payload_len) - 2*sizeof(struct frag_hdr));
-            pskb_expand_head(first_frag, 0, ntohs(ipv6_hdr(second_frag)->payload_len) - 2*sizeof(struct frag_hdr), GFP_ATOMIC);
-            fh1 = (struct frag_hdr*)(ipv6_hdr(first_frag) + 1);
-            hdr = ipv6_hdr(first_frag);
-            hdr->nexthdr = fh1->nexthdr;
-            nat46_reasm_debug(1, "Reassembled next header: %d", hdr->nexthdr);
-            memmove(fh1, (fh1+1), first_frag->len - sizeof(struct frag_hdr));
-            first_frag->len -= sizeof(struct frag_hdr);
-            first_frag->tail -= sizeof(struct frag_hdr);
-
-            memcpy(skb_tail_pointer(first_frag), (fh2+1), ntohs(ipv6_hdr(second_frag)->payload_len) - sizeof(struct frag_hdr));
-            first_frag->len += ntohs(ipv6_hdr(second_frag)->payload_len) - sizeof(struct frag_hdr);
-            first_frag->tail += ntohs(ipv6_hdr(second_frag)->payload_len) - sizeof(struct frag_hdr);
-
-            hdr->payload_len = htons(ntohs(hdr->payload_len) + ntohs(ipv6_hdr(second_frag)->payload_len) - 2*sizeof(struct frag_hdr));
-            nat46_reasm_debug(1, "reassembly successful from 2 frags, len: %d!", first_frag->len);
-            // nat46_reasm_debug(1, "pointers: head: %08x, data: %08x, tail: %08x, end: %08x", old_skb->head, old_skb->data, old_skb->tail, old_skb->end);
-            // nat46debug_dump(nat46, 1, old_skb->head, old_skb->len);
-            
-          } else {
-            nat46_reasm_debug(1, "Can not reassemble two fragments, drop both");
-            // nat46debug_dump(-1, first_frag->head, first_frag->len);
-          }
-        }
-        if (first_frag == nat46->frags[i].skb) {
-          int old_len = old_skb->len;
-          nat46_reasm_debug(1, "Need to copy the data from the first fragment into the current and increase the len: (%d -> %d+%d)", old_len, old_len, first_frag->len);
-          skb_put(old_skb, first_frag->len - old_len);
-          memcpy(old_skb->data, first_frag->data, first_frag->len);
-        }
-        kfree_skb(nat46->frags[i].skb); 
-        ret_skb = old_skb;
-           
-        if(nat46->nfrags > 1) {
-          memcpy(&nat46->frags[i], &nat46->frags[nat46->nfrags-1], sizeof(nat46->frags[i]));
-        }
-        if (nat46->nfrags > 0) { 
-          memset(&nat46->frags[nat46->nfrags-1], 0, sizeof(nat46->frags[nat46->nfrags-1]));
-          nat46->nfrags--;
-        }
-        nat46_reasm_debug(1, "Deleted fragment with index %d, new nfrags: %d", i, nat46->nfrags);
-     
-    } else {
-      if (nat46->nfrags < NAT46_MAX_V6_FRAGS) {
-        i = nat46->nfrags++;
-        new_frag = skb_copy(old_skb, GFP_ATOMIC);
-        memcpy(&nat46->frags[i].saddr, &hdr->saddr, 16);
-        memcpy(&nat46->frags[i].daddr, &hdr->daddr, 16);
-        nat46->frags[i].identification = fh->identification;
-        nat46->frags[i].frag_off = fh->frag_off;
-        nat46->frags[i].skb = new_frag;
-        nat46_reasm_debug(1, "Fragment id %08x queued at index %d", fh->identification, i);
-        ret_skb = old_skb;
-      } else {
-        assert("ran out of fragments!" == NULL);
-      }
-     
-       
-    }
-  }
-  return ret_skb;
 }
 
 static uint16_t nat46_fixup_icmp_time_exceeded(nat46_instance_t *nat46, struct iphdr *iph, struct icmphdr *icmph, struct sk_buff *old_skb) {
@@ -1375,59 +1285,78 @@ static uint16_t nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, str
   return ret;
 }
 
-/* Add the TCP/UDP pseudoheader, basing on the existing checksum */
+u16 get_next_ip_id() {
+  static u16 id = 0;
+  return id++;
+}
 
-__sum16 csum_tcpudp_remagic(__be32 saddr, __be32 daddr, unsigned short len,
-                  unsigned short proto, u16 csum) {
-  u16 *pdata;
-  int i;
-  u16 len0, len1;
+u16 fold_ipv6_frag_id(u32 v6id) {
+  return ((0xffff & (v6id >> 16)) ^ (v6id & 0xffff));
+}
 
-  pdata = (u16 *)&saddr;
-  csum = csum16_upd(csum, 0, *pdata++);
-  csum = csum16_upd(csum, 0, *pdata++);
-  pdata = (u16 *)&daddr;
-  csum = csum16_upd(csum, 0, *pdata++);
-  csum = csum16_upd(csum, 0, *pdata++);
-
-  csum = csum16_upd(csum, 0, htons(proto));
-  len1 = htons( (len >> 16) & 0xffff );
-  len0 = htons(len & 0xffff);
-  csum = csum16_upd(csum, 0, len1);
-  csum = csum16_upd(csum, 0, len0);
-  return csum;
+void *add_offset(void *ptr, u16 offset) {
+  return (((char *)ptr)+offset);
 }
 
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
   uint16_t proto;
+  uint16_t frag_off;
+  uint16_t frag_id;
 
   struct iphdr * iph;
   __u32 v4saddr, v4daddr;
   struct sk_buff * new_skb = 0;
   int truncSize = 0;
+  int v6packet_l3size = sizeof(*ip6h);
+  int l3_infrag_payload_len = ntohs(ip6h->payload_len);
+  int do_l4_translate = 0;
 
-  nat46debug(1, "nat46_ipv6_input packet");
+  nat46debug(4, "nat46_ipv6_input packet");
 
   if(ip6_input_not_interested(nat46, ip6h, old_skb)) {
     nat46debug(1, "nat46_ipv6_input not interested");
     goto done;
   }
-  nat46debug(1, "nat46_ipv6_input next hdr: %d, len: %d, is_fragment: %d", 
+  nat46debug(5, "nat46_ipv6_input next hdr: %d, len: %d, is_fragment: %d",
                 ip6h->nexthdr, old_skb->len, ip6h->nexthdr == NEXTHDR_FRAGMENT);
-  // debug_dump(DBG_V6, 1, old_skb->data, 64);
-
   proto = ip6h->nexthdr;
   if (proto == NEXTHDR_FRAGMENT) {
-    nat46debug(5, "Trying reassembly for fragment");
-    old_skb = try_reassembly(nat46, old_skb);
-    if (!old_skb) {
-      goto done;
+    struct frag_hdr *fh = (struct frag_hdr*)(ip6h + 1);
+    v6packet_l3size += sizeof(struct frag_hdr);
+    l3_infrag_payload_len -= sizeof(struct frag_hdr);
+    nat46debug(2, "Fragment ID: %08X", fh->identification);
+    nat46debug_dump(nat46, 6, fh, ntohs(ip6h->payload_len));
+
+    if(fh->frag_off == 0) {
+      /* Atomic fragment */
+      proto = fh->nexthdr;
+      frag_off = 0; /* no DF bit */
+      frag_id = fold_ipv6_frag_id(fh->identification);
+      nat46debug(2, "Atomic fragment");
+      do_l4_translate = 1;
+    } else {
+      if (0 == (ntohs(fh->frag_off) & IP6_OFFSET)) {
+        /* First fragment. Pretend business as usual, but when creating IP, set the "MF" bit. */
+        frag_off = htons(((ntohs(fh->frag_off) & 7) << 13) + (((ntohs(fh->frag_off) >> 3) & 0x1FFF)));
+        frag_id = fold_ipv6_frag_id(fh->identification);
+	/* ntohs(fh->frag_off) & IP6_MF */
+        proto = fh->nexthdr;
+        do_l4_translate = 1;
+        nat46debug(2, "First fragment, frag_off: %04X, frag id: %04X orig frag_off: %04X", ntohs(frag_off), frag_id, ntohs(fh->frag_off));
+      } else {
+        /* Not the first fragment - leave as is, allow to translate IPv6->IPv4 */
+        proto = fh->nexthdr;
+        frag_off = htons(((ntohs(fh->frag_off) & 7) << 13) + (((ntohs(fh->frag_off) >> 3) & 0x1FFF)));
+        frag_id = fold_ipv6_frag_id(fh->identification);
+        nat46debug(2, "Not first fragment, frag_off: %04X, frag id: %04X orig frag_off: %04X", ntohs(frag_off), frag_id, ntohs(fh->frag_off));
+      }
     }
-    ip6h = ipv6_hdr(old_skb);
-    proto = ip6h->nexthdr;
-    nat46debug(5, "New proto after reassembly: %d", proto);
+  } else {
+    frag_off = htons(IP_DF);
+    frag_id = get_next_ip_id();
+    do_l4_translate = 1;
   }
   
   if(!xlate_v6_to_v4(nat46, &nat46->local_rule, &ip6h->daddr, &v4daddr)) {
@@ -1443,32 +1372,36 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
       goto done;
     }
   }
-
-  switch(proto) {
-    case NEXTHDR_TCP: {
-      struct tcphdr *th = tcp_hdr(old_skb);
-      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), ip6h->nexthdr, th->check); 
-      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, ntohs(ip6h->payload_len), NEXTHDR_TCP, sum1); /* add pseudoheader */
-      th->check = sum2;
-      break;
-      }
-    case NEXTHDR_UDP: {
-      struct udphdr *udp = udp_hdr(old_skb);
-      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), ip6h->nexthdr, udp->check); 
-      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, ntohs(ip6h->payload_len), NEXTHDR_UDP, sum1); /* add pseudoheader */
-      udp->check = sum2;
-      break;
-      }
-    case NEXTHDR_ICMP:
-      nat46_fixup_icmp6(nat46, ip6h, old_skb);
-      break;
-    case NEXTHDR_FRAGMENT:
-      nat46debug(2, "[ipv6] Next header is fragment. Not doing anything.");
-      goto done;
-      break;
-    default:
-      nat46debug(0, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
-      goto done;
+  if (do_l4_translate) {
+    switch(proto) {
+      /* CHECKSUMS UPDATE */
+      case NEXTHDR_TCP: {
+        struct tcphdr *th = add_offset(ip6h, v6packet_l3size);
+        u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, l3_infrag_payload_len, NEXTHDR_TCP, th->check);
+        u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, l3_infrag_payload_len, NEXTHDR_TCP, sum1);
+        th->check = sum2;
+        break;
+        }
+      case NEXTHDR_UDP: {
+        struct udphdr *udp = add_offset(ip6h, v6packet_l3size);
+        u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, l3_infrag_payload_len, NEXTHDR_UDP, udp->check);
+        u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, l3_infrag_payload_len, NEXTHDR_UDP, sum1);
+        udp->check = sum2;
+        break;
+        }
+      case NEXTHDR_ICMP: {
+        struct icmp6hdr *icmp6h = add_offset(ip6h, v6packet_l3size);
+        u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, l3_infrag_payload_len, NEXTHDR_ICMP, icmp6h->icmp6_cksum);
+        icmp6h->icmp6_cksum = sum1;
+        nat46debug_dump(nat46, 10, icmp6h, l3_infrag_payload_len);
+        nat46_fixup_icmp6(nat46, ip6h, icmp6h, old_skb);
+        proto = IPPROTO_ICMP;
+        break;
+        }
+      default:
+        nat46debug(0, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
+        goto done;
+    }
   }
 
   new_skb = skb_copy(old_skb, GFP_ATOMIC); // other possible option: GFP_ATOMIC
@@ -1483,14 +1416,14 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
   new_skb->nfct = NULL;
 
   /* modify packet: actual IPv6->IPv4 transformation */
-  truncSize = sizeof(struct ipv6hdr) - sizeof(struct iphdr); /* chop first 20 bytes */
+  truncSize = v6packet_l3size - sizeof(struct iphdr); /* chop first 20 bytes */
   skb_pull(new_skb, truncSize);
   skb_reset_network_header(new_skb);
   skb_set_transport_header(new_skb,20); /* transport (TCP/UDP/ICMP/...) header starts after 20 bytes */
 
   /* build IPv4 header */
   iph = ip_hdr(new_skb);
-  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr);
+  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr, frag_id, frag_off, proto, l3_infrag_payload_len);
   new_skb->protocol = htons(ETH_P_IP);
 
   if (ntohs(iph->tot_len) >= 2000) {
