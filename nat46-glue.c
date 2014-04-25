@@ -1023,6 +1023,7 @@ int ip6_forward(struct sk_buff *skb) {
 void netif_rx(struct sk_buff *skb) {
   if (0x45 == skb->data[0]) {
     /* IPv4 packet. */
+    skb_put(skb, -14);
     ip_forward(skb);
   } else {
     /* not IPv4 packet. We call this only for v4 and v6, so this is IPv6 */
