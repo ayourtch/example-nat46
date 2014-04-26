@@ -358,8 +358,8 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail, gfp_t gfp_mask) 
 }
 
 struct sk_buff *skb_copy(const struct sk_buff *skb, gfp_t gfp_mask) {
-  struct sk_buff *sknew = alloc_skb(skb->end - skb->data, gfp_mask);
-  memcpy(sknew->data, skb->data, skb->end - skb->data);
+  struct sk_buff *sknew = alloc_skb(skb->len, gfp_mask);
+  memcpy(sknew->data, skb->data, skb->len);
   sknew->len = skb->tail - skb->head;
   sknew->tail = sknew->head + (skb->len);
   return sknew; 
