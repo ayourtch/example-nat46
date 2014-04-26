@@ -550,6 +550,8 @@ void skb_set_transport_header(struct sk_buff *skb, const int offset);
 struct iphdr *ip_hdr(struct sk_buff *skb);
 struct udphdr *udp_hdr(const struct sk_buff *skb);
 struct tcphdr *tcp_hdr(const struct sk_buff *skb);
+struct icmp6hdr *icmp6_hdr(const struct sk_buff *skb);
+
 __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
                         const struct in6_addr *daddr,
                         __u32 len, unsigned short proto,

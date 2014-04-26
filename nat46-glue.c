@@ -418,8 +418,8 @@ struct iphdr *ip_hdr(struct sk_buff *skb) {
   return ((struct iphdr *) &skb->dbuf->buf[skb->network_header]);
 }
 
-struct icmphdr *icmp_hdr(const struct sk_buff *skb) {
-  return (struct icmphdr *)skb_transport_header(skb);
+struct icmp6hdr *icmp6_hdr(const struct sk_buff *skb) {
+  return (void *)skb_transport_header(skb);
 }
 
 struct ipv6hdr *ipv6_hdr(struct sk_buff *skb) {
