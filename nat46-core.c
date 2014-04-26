@@ -53,7 +53,7 @@ nat46debug_dump(nat46_instance_t *nat46, int level, void *addr, int len)
     if(i % 16 == 0) {
       *pc1 = 0;
       *pc2 = 0;
-      nat46_reasm_debug(level, "%s:   %s  %s", buf0, buf1, buf2);
+      nat46debug(level, "%s:   %s  %s", buf0, buf1, buf2);
     }
 
   }
@@ -67,7 +67,7 @@ nat46debug_dump(nat46_instance_t *nat46, int level, void *addr, int len)
     }
     *pc1 = 0;
     *pc2 = 0;
-    nat46_reasm_debug(level, "%s:   %s  %s", buf0, buf1, buf2);
+    nat46debug(level, "%s:   %s  %s", buf0, buf1, buf2);
   }
 }
 
