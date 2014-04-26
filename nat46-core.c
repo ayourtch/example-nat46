@@ -711,23 +711,46 @@ __sum16 csum_ipv6_unmagic(nat46_instance_t *nat46, const struct in6_addr *saddr,
 
 /* Update ICMPv6 type/code with incremental checksum adjustment */
 void update_icmp6_type_code(nat46_instance_t *nat46, struct icmp6hdr *icmp6h, u8 type, u8 code) {
-  u16 old_tc = (((uint16_t)icmp6h->icmp6_code) << 8) + icmp6h->icmp6_type;
-  u16 new_tc = (((uint16_t)code) << 8) + type;
+  u16 old_tc = *((u16 *)icmp6h);
+  u16 new_tc;
   u16 old_csum = icmp6h->icmp6_cksum;
+  icmp6h->icmp6_type = type;
+  icmp6h->icmp6_code = code;
+  new_tc = *((u16 *)icmp6h);
   /* https://tools.ietf.org/html/rfc1624 */
   u16 new_csum = csum16_upd(old_csum, old_tc, new_tc);
   nat46debug(1, "Updating the ICMPv6 type to ICMP type %d and code to %d. Old T/C: %04X, New T/C: %04X, Old CS: %04X, New CS: %04X", type, code, old_tc, new_tc, old_csum, new_csum);
   icmp6h->icmp6_cksum = new_csum;
-  icmp6h->icmp6_type = type;
-  icmp6h->icmp6_code = code;
 }
 
+
+u16 get_next_ip_id() {
+  static u16 id = 0;
+  return id++;
+}
+
+u16 fold_ipv6_frag_id(u32 v6id) {
+  return ((0xffff & (v6id >> 16)) ^ (v6id & 0xffff));
+}
+
+void *add_offset(void *ptr, u16 offset) {
+  return (((char *)ptr)+offset);
+}
 
 
 /* FIXME: traverse the headers properly */
 void *get_next_header_ptr6(void *pv6, int v6_len) {
   struct ipv6hdr *ip6h = pv6;
-  return (ip6h+1);
+  void *ret = (ip6h+1);
+
+  if (ip6h->nexthdr == NEXTHDR_FRAGMENT) {
+    struct frag_hdr *fh = (struct frag_hdr*)(ip6h + 1);
+    if(fh->frag_off == 0) {
+      /* Atomic fragment */
+      ret = add_offset(ret, 8);
+    }
+  }
+  return ret;
 }
 
 void fill_v4hdr_from_v6hdr(struct iphdr * iph, struct ipv6hdr *ip6h, __u32 v4saddr, __u32 v4daddr, __u16 id, __u16 frag_off, __u16 proto, int l3_payload_len) {
@@ -772,6 +795,9 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, void *ptrans_hdr, int
   struct iphdr new_ipv4;
   struct iphdr *iph = &new_ipv4;
   u16 proto = ip6h->nexthdr;
+  u16 ipid = 0;
+  u16 ipflags = htons(IP_DF);
+  int infrag_payload_len = ntohs(ip6h->payload_len);
 
 
   /*
@@ -785,18 +811,35 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, void *ptrans_hdr, int
     nat46debug(0, "[nat46] Could not translate inner dest address v6->v4");
   }
 
+  if (proto == NEXTHDR_FRAGMENT) {
+    struct frag_hdr *fh = (struct frag_hdr*)(ip6h + 1);
+    if(fh->frag_off == 0) {
+      /* Atomic fragment */
+      proto = fh->nexthdr;
+      ipid = fold_ipv6_frag_id(fh->identification);
+      v6_len -= 8;
+      infrag_payload_len -= 8;
+      *ptailTruncSize += 8;
+      ipflags = 0;
+    }
+  }
+
+
   switch(proto) {
     case NEXTHDR_TCP: {
       struct tcphdr *th = ptrans_hdr;
-      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), NEXTHDR_TCP, th->check);
-      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, ntohs(ip6h->payload_len), NEXTHDR_TCP, sum1); /* add pseudoheader */
+      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, infrag_payload_len, NEXTHDR_TCP, th->check);
+      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, infrag_payload_len, NEXTHDR_TCP, sum1); /* add pseudoheader */
+      if(ul_sum) {
+        *ul_sum = csum16_upd(*ul_sum, th->check, sum2);
+        }
       th->check = sum2;
       break;
       }
     case NEXTHDR_UDP: {
       struct udphdr *udp = ptrans_hdr;
-      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, ntohs(ip6h->payload_len), NEXTHDR_UDP, udp->check);
-      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, ntohs(ip6h->payload_len), NEXTHDR_UDP, sum1); /* add pseudoheader */
+      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, infrag_payload_len, NEXTHDR_UDP, udp->check);
+      u16 sum2 = csum_tcpudp_remagic(v4saddr, v4daddr, infrag_payload_len, NEXTHDR_UDP, sum1); /* add pseudoheader */
       if(ul_sum) {
         *ul_sum = csum16_upd(*ul_sum, udp->check, sum2);
         }
@@ -805,6 +848,13 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, void *ptrans_hdr, int
       }
     case NEXTHDR_ICMP: {
       struct icmp6hdr *icmp6h = ptrans_hdr;
+      u16 sum0 = icmp6h->icmp6_cksum;
+      u16 sum1 = csum_ipv6_unmagic(nat46, &ip6h->saddr, &ip6h->daddr, infrag_payload_len, NEXTHDR_ICMP, icmp6h->icmp6_cksum);
+      if(ul_sum) {
+        *ul_sum = csum16_upd(*ul_sum, sum0, sum1);
+        }
+      icmp6h->icmp6_cksum = sum1;
+      proto = IPPROTO_ICMP;
       switch(icmp6h->icmp6_type) {
         case ICMPV6_ECHO_REQUEST:
           update_icmp6_type_code(nat46, icmp6h, ICMP_ECHO, icmp6h->icmp6_code);
@@ -818,9 +868,9 @@ int xlate_payload6_to4(nat46_instance_t *nat46, void *pv6, void *ptrans_hdr, int
     }
   }
 
-  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr, 0, htons(IP_DF), ip6h->nexthdr, ntohs(ip6h->payload_len));
+  fill_v4hdr_from_v6hdr(iph, ip6h, v4saddr, v4daddr, ipid, ipflags, proto, infrag_payload_len);
   if(ul_sum) {
-    *ul_sum = unchecksum16(pv6, 20, *ul_sum);
+    *ul_sum = unchecksum16(pv6, (((u8 *)ptrans_hdr)-((u8 *)pv6))/2, *ul_sum);
     *ul_sum = rechecksum16(iph, 10, *ul_sum);
   }
 
@@ -1315,19 +1365,6 @@ static uint16_t nat46_fixup_icmp(nat46_instance_t *nat46, struct iphdr *iph, str
   return ret;
 }
 
-u16 get_next_ip_id() {
-  static u16 id = 0;
-  return id++;
-}
-
-u16 fold_ipv6_frag_id(u32 v6id) {
-  return ((0xffff & (v6id >> 16)) ^ (v6id & 0xffff));
-}
-
-void *add_offset(void *ptr, u16 offset) {
-  return (((char *)ptr)+offset);
-}
-
 void nat46_ipv6_input(struct sk_buff *old_skb) {
   struct ipv6hdr *ip6h = ipv6_hdr(old_skb);
   nat46_instance_t *nat46 = get_nat46_instance(old_skb);
@@ -1475,7 +1512,7 @@ done:
 
 
 
-void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
+void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr, int do_atomic_frag)
 {
   u32 sum1=0;
   u16 sum2=0;
@@ -1487,7 +1524,7 @@ void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
       unsigned tcplen = 0;
 
       oldsum = th->check;
-      tcplen = ntohs(ip6hdr->payload_len); /* TCP header + payload */
+      tcplen = ntohs(ip6hdr->payload_len) - (do_atomic_frag?8:0); /* TCP header + payload */
       th->check = 0;
       sum1 = csum_partial((char*)th, tcplen, 0); /* calculate checksum for TCP hdr+payload */
       sum2 = csum_ipv6_magic(&ip6hdr->saddr, &ip6hdr->daddr, tcplen, ip6hdr->nexthdr, sum1); /* add pseudoheader */
@@ -1496,7 +1533,7 @@ void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
       }
     case IPPROTO_UDP: {
       struct udphdr *udp = udp_hdr(skb);
-      unsigned udplen = ntohs(ip6hdr->payload_len); /* UDP hdr + payload */
+      unsigned udplen = ntohs(ip6hdr->payload_len) - (do_atomic_frag?8:0); /* UDP hdr + payload */
 
       oldsum = udp->check;
       udp->check = 0;
@@ -1509,9 +1546,9 @@ void ip6_update_csum(struct sk_buff * skb, struct ipv6hdr * ip6hdr)
       break;
       }
     case NEXTHDR_ICMP: {
-      struct icmp6hdr *icmp6h = (struct icmp6hdr *)(ip6hdr + 1);
+      struct icmp6hdr *icmp6h = icmp_hdr(skb);
       unsigned icmp6len = 0;
-      icmp6len = ntohs(ip6hdr->payload_len); /* ICMP header + payload */
+      icmp6len = ntohs(ip6hdr->payload_len) - (do_atomic_frag?8:0); /* ICMP header + payload */
       icmp6h->icmp6_cksum = 0;
       sum1 = csum_partial((char*)icmp6h, icmp6len, 0); /* calculate checksum for TCP hdr+payload */
       sum2 = csum_ipv6_magic(&ip6hdr->saddr, &ip6hdr->daddr, icmp6len, ip6hdr->nexthdr, sum1); /* add pseudoheader */
@@ -1537,6 +1574,8 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
 
   int tclass = 0;
   int flowlabel = 0;
+
+  int do_atomic_frag = 1;
 
   struct ipv6hdr * hdr6;
   struct iphdr * hdr4 = ip_hdr(old_skb);
@@ -1593,23 +1632,22 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   memset(IPCB(new_skb), 0, sizeof(struct inet_skb_parm));
 
   /* expand header (add 20 extra bytes at the beginning of sk_buff) */
-  pskb_expand_head(new_skb, 20, 0, GFP_ATOMIC);
+  pskb_expand_head(new_skb, 20 + (do_atomic_frag?8:0), 0, GFP_ATOMIC);
 
-  skb_push(new_skb, sizeof(struct ipv6hdr) - sizeof(struct iphdr)); /* push boundary by extra 20 bytes */
+  skb_push(new_skb, sizeof(struct ipv6hdr) - sizeof(struct iphdr) + (do_atomic_frag?8:0)); /* push boundary by extra 20 bytes */
 
   skb_reset_network_header(new_skb);
-  skb_set_transport_header(new_skb, 40); /* transport (TCP/UDP/ICMP/...) header starts after 40 bytes */
+  skb_set_transport_header(new_skb, 40 + (do_atomic_frag?8:0) ); /* transport (TCP/UDP/ICMP/...) header starts after 40 bytes */
 
   hdr6 = ipv6_hdr(new_skb);
-  memset(hdr6, 0, sizeof(*hdr6));
+  memset(hdr6, 0, sizeof(*hdr6) + (do_atomic_frag?8:0));
 
   /* build IPv6 header */
   tclass = 0; /* traffic class */
   *(__be32 *)hdr6 = htonl(0x60000000 | (tclass << 20)) | flowlabel; /* version, priority, flowlabel */
 
   /* IPv6 length is a payload length, IPv4 is hdr+payload */
-  hdr6->payload_len = htons(ntohs(hdr4->tot_len) - sizeof(struct iphdr)); 
-
+  hdr6->payload_len = htons(ntohs(hdr4->tot_len) - sizeof(struct iphdr) + (do_atomic_frag?8:0)); 
   hdr6->nexthdr = hdr4->protocol;
   hdr6->hop_limit = hdr4->ttl;
   memcpy(&hdr6->saddr, v6saddr, 16);
@@ -1619,7 +1657,16 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   // new_skb->mark = old_skb->mark;
   new_skb->protocol = htons(ETH_P_IPV6);
 
-  ip6_update_csum(new_skb, hdr6);
+  if (do_atomic_frag) {
+    struct frag_hdr *fh = (struct frag_hdr*)(hdr6 + 1);
+    fh->frag_off = 0;
+    fh->nexthdr = hdr4->protocol;
+    fh->identification = hdr4->id;
+  }
+  ip6_update_csum(new_skb, hdr6, do_atomic_frag);
+
+  hdr6->nexthdr = do_atomic_frag ? NEXTHDR_FRAGMENT : hdr4->protocol;
+
 
   // FIXME: check if you can not fit the packet into the cached MTU
   // if (dst_mtu(skb_dst(new_skb))==0) { }
