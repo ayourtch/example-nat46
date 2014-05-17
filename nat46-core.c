@@ -1,8 +1,19 @@
-/* (c) Andrew Yourtchenko 2014, ayourtch@gmail.com */
 /* 
  * core nat46 functionality.
  * It does not know about network devices, modules or anything similar: 
  * those are abstracted away by other layers.
+ *
+ * Copyright (c) 2013-2014 Andrew Yourtchenko <ayourtch@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
  */ 
 
 #include <net/route.h>
@@ -179,6 +190,11 @@ int nat46_set_config(nat46_instance_t *nat46, char *buf, int count) {
       if (val) {
         nat46->debug = simple_strtol(val, NULL, 10);
       }
+    } else if (0 == strcmp(arg_name, "make-atomic-frag")) {
+      val = get_next_arg(&tail);
+      if (val) {
+        nat46->do_atomic_frag = simple_strtol(val, NULL, 10);
+      }
     } else if (arg_name == strstr(arg_name, "local.")) {
       arg_name += strlen("local.");
       nat46debug(13, "Setting local xlate parameter");
@@ -211,7 +227,7 @@ char *xlate_style_to_string(nat46_xlate_style_t style) {
  */
 int nat46_get_config(nat46_instance_t *nat46, char *buf, int count) {
   int ret = 0;
-  char *format = "local.v4 %pI4/%d local.v6 %pI6c/%d local.style %s local.ea-len %d local.psid-offset %d remote.v4 %pI4/%d remote.v6 %pI6c/%d remote.style %s remote.ea-len %d remote.psid-offset %d debug %d";
+  char *format = "local.v4 %pI4/%d local.v6 %pI6c/%d local.style %s local.ea-len %d local.psid-offset %d remote.v4 %pI4/%d remote.v6 %pI6c/%d remote.style %s remote.ea-len %d remote.psid-offset %d debug %d make-atomic-frag %d";
 
   ret = snprintf(buf, count, format,
 		&nat46->local_rule.v4_pref, nat46->local_rule.v4_pref_len, 
@@ -221,7 +237,7 @@ int nat46_get_config(nat46_instance_t *nat46, char *buf, int count) {
 		&nat46->remote_rule.v4_pref, nat46->remote_rule.v4_pref_len, 
 		&nat46->remote_rule.v6_pref, nat46->remote_rule.v6_pref_len, 
 		xlate_style_to_string(nat46->remote_rule.style), nat46->remote_rule.ea_len, nat46->remote_rule.psid_offset,
-		nat46->debug);
+		nat46->debug, nat46->do_atomic_frag);
   return ret;
 }
 
@@ -953,7 +969,7 @@ static void nat46_fixup_icmp6_dest_unreach(nat46_instance_t *nat46, struct ipv6h
   len = xlate_payload6_to4(nat46, (icmp6h + 1), get_next_header_ptr6((icmp6h + 1), len), len, &icmp6h->icmp6_cksum, ptailTruncSize);
 }
 
-static void nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb) {
+static void nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr *ip6h, struct icmp6hdr *icmp6h, struct sk_buff *old_skb, int *ptailTruncSize) {
   /*
    * Packet Too Big (Type 2):  Translate to an ICMPv4 Destination
    * Unreachable (Type 3) with Code 4, and adjust the ICMPv4
@@ -988,6 +1004,19 @@ static void nat46_fixup_icmp6_pkt_toobig(nat46_instance_t *nat46, struct ipv6hdr
    *            b.  If the packet is greater than 1280 bytes, the translator
    *                SHOULD set the IPv4 DF bit to 1.
    */
+  int len = ntohs(ip6h->payload_len)-sizeof(*icmp6h);
+  u16 *pmtu = ((u16 *)icmp6h) + 3; /* IPv4-compatible MTU value is 16 bit */
+  u16 old_csum = icmp6h->icmp6_cksum;
+
+  /* FIXME: get rid of the magic numbers below (diff between IPv6 and IPv4 header size) */
+  if (ntohs(*pmtu) > 20) {
+    icmp6h->icmp6_cksum = csum16_upd(old_csum, *pmtu, htons(ntohs(*pmtu) - 20));
+    *pmtu = htons(ntohs(*pmtu) - 20);
+  }
+
+  len = xlate_payload6_to4(nat46, (icmp6h + 1), get_next_header_ptr6((icmp6h + 1), len), len, &icmp6h->icmp6_cksum, ptailTruncSize);
+
+  update_icmp6_type_code(nat46, icmp6h, 3, 4);
 
 }
 
@@ -1095,7 +1124,7 @@ static void nat46_fixup_icmp6(nat46_instance_t *nat46, struct ipv6hdr *ip6h, str
         nat46_fixup_icmp6_dest_unreach(nat46, ip6h, icmp6h, old_skb, ptailTruncSize);
         break;
       case ICMPV6_PKT_TOOBIG:
-        nat46_fixup_icmp6_pkt_toobig(nat46, ip6h, icmp6h, old_skb);
+        nat46_fixup_icmp6_pkt_toobig(nat46, ip6h, icmp6h, old_skb, ptailTruncSize);
         break;
       case ICMPV6_TIME_EXCEED:
         nat46_fixup_icmp6_time_exceed(nat46, ip6h, icmp6h, old_skb, ptailTruncSize);
@@ -1470,6 +1499,10 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
         nat46debug(0, "[ipv6] Next header: %u. Only TCP, UDP, and ICMP6 are supported.", proto);
         goto done;
     }
+  } else {
+    if(NEXTHDR_ICMP == proto) {
+      proto = IPPROTO_ICMP;
+    }
   }
 
   new_skb = skb_copy(old_skb, GFP_ATOMIC); // other possible option: GFP_ATOMIC
@@ -1502,6 +1535,7 @@ void nat46_ipv6_input(struct sk_buff *old_skb) {
 
   new_skb->dev = old_skb->dev;
   nat46debug(5, "about to send v4 packet, flags: %02x",  IPCB(new_skb)->flags);
+  nat46_netdev_count_xmit(new_skb, old_skb->dev);
   netif_rx(new_skb);
 
   /* TBD: should copy be released here? */
@@ -1575,7 +1609,7 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   int tclass = 0;
   int flowlabel = 0;
 
-  int do_atomic_frag = 1;
+  int do_atomic_frag = nat46->do_atomic_frag;
 
   struct ipv6hdr * hdr6;
   struct iphdr * hdr4 = ip_hdr(old_skb);
@@ -1590,11 +1624,6 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
   }
   nat46debug(1, "nat46_ipv4_input packet");
   nat46debug(5, "v4 packet flags: %02x",  IPCB(old_skb)->flags);
-
-  if (ntohs(hdr4->tot_len) > 1480) {
-    // FIXME: need to send Packet Too Big here.
-    goto done; 
-  }
 
   switch(hdr4->protocol) {
     case IPPROTO_TCP: {
@@ -1673,6 +1702,7 @@ void nat46_ipv4_input(struct sk_buff *old_skb) {
 
   new_skb->dev = old_skb->dev;
 
+  nat46_netdev_count_xmit(new_skb, old_skb->dev);
   netif_rx(new_skb);
 
 done:
