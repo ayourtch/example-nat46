@@ -1039,6 +1039,11 @@ void set_v6_idx(int idx) {
   v6_idx = idx;
 }
 
+void nat46_netdev_count_xmit(struct sk_buff *skb, struct net_device *dev) {
+ // NO-OP
+}
+
+
 void nat46_glue_periodic(void) {
   v6_stack_periodic(&v6_main_stack);
 }

@@ -26,5 +26,8 @@ void set_v6_idx(int idx);
 void handle_v4_packet(dbuf_t *d);
 void handle_v6_packet(dbuf_t *d);
 
+void nat46_netdev_count_xmit(struct sk_buff *skb, struct net_device *dev);
+
+
 #endif
 
