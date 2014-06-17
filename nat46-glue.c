@@ -1050,6 +1050,7 @@ void nat46_glue_periodic(void) {
 
 void nat46_conf(char *cfg_str) {
   nat46_instance_t *nat46 = get_nat46_instance(NULL);
+  if (!cfg_str) { cfg_str = ""; }
   char *buf = malloc(strlen(cfg_str) + 1);
   memcpy(buf, cfg_str, strlen(cfg_str) + 1);
 
