@@ -787,6 +787,8 @@ void set_nat46_config(char *cfg) {
 
 void v6_stack_periodic(v6_stack_t *v6) {
   uint64_t now = get_time_msec();
+  char cfgstr[200];
+  char ipv6str[100];
   int i;
   set_debug_level(DBG_V6, 100);
   set_debug_level(DBG_V6, 0);
@@ -843,7 +845,10 @@ void v6_stack_periodic(v6_stack_t *v6) {
             /* The globally routable address is active. Setup NAT46 */
 
             nat46_conf("local.v6 ::/128 remote.style RFC6052 local.style MAP0 local.v4 100.64.1.2/32");
-            memcpy(&nat46->local_rule.v6_pref, &v6->my_v6addr[i], 16);
+            // Configure local IPv6 address
+            inet_ntop(AF_INET6, &v6->my_v6addr[i], ipv6str, sizeof(ipv6str));
+            snprintf(cfgstr, sizeof(cfgstr)-1, "local.v6 %s/128", ipv6str);
+            nat46_conf(cfgstr);
             // nat46_conf("nat64pref 64:ff9b::/96");
             // Go6 ASR1k
             nat46_conf("remote.v6 2001:67c:27e4:11::/96");
@@ -983,11 +988,18 @@ int need_to_process_v6(struct sk_buff *skb, v6_stack_t *v6) {
  */
 
 
-nat46_instance_t single_nat46;
+nat46_instance_t *single_nat46 = NULL;
 
 nat46_instance_t *get_nat46_instance(struct sk_buff *skb) {
   /* In kernel this will also lock */
-  return &single_nat46;
+  if(!single_nat46) {
+    nat46_instance_t *nat46 = calloc(sizeof(nat46_instance_t) + 1*sizeof(nat46_xlate_rulepair_t), 1);
+    single_nat46 = nat46;
+    nat46->sig = NAT46_SIGNATURE;
+    nat46->npairs = 1;
+    nat46->refcount = 1; /* The caller gets the reference */
+  }
+  return single_nat46;
 }
 
 void release_nat46_instance(nat46_instance_t *nat46) {

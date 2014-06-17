@@ -1,4 +1,4 @@
-all: example-nat46 test-nat46-core test
+all: example-nat46
 CC=gcc
 CFLAGS=-Wall -I.. -g -Wno-unused-function
 LDFLAGS=-L .. -lay -lpcap
